@@ -1,7 +1,0 @@
-cho gpt doc 3 file gui.py battleship.py engine.py -> bo AI di
-
-cho gpt doc file battleship.doc cua ae minh lam
-
-tao nhanh rieng cua minh tren git
-
-thiet lap cau truc du an
