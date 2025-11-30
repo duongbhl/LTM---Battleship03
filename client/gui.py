@@ -25,14 +25,22 @@ LOGOUT_BUTTON_HOVER_COLOR = (210, 160, 100)
 
 # Font sizes
 title_font_size = int(MENU_HEIGHT * 0.08)
-button_font_size = int(MENU_HEIGHT * 0.05)
+button_font_size = int(MENU_HEIGHT * 0.04)
 small_font_size = int(MENU_HEIGHT * 0.03)
 
 font_title = pygame.font.SysFont("arial", title_font_size, bold=True)
 font_button = pygame.font.SysFont("arial", button_font_size)
 font_small = pygame.font.SysFont("arial", small_font_size)
 
-# ✅ GLOBAL SESSION MANAGEMENT
+def render_scrolled(font, text, max_width, color):
+    surf = font.render(text, True, color)
+    while surf.get_width() > max_width:
+        text = text[1:]
+        surf = font.render(text, True, color)
+    return surf
+
+
+# GLOBAL SESSION MANAGEMENT
 current_user = None
 is_logged_in = False
 
@@ -110,20 +118,51 @@ def send_auth_request(command, username, password):
 def login_screen():
     """Màn hình đăng nhập"""
     global current_user, is_logged_in
-    
-    input_box_user = pygame.Rect(MENU_WIDTH//2 - 250, MENU_HEIGHT//2 - 120, 500, 70)
-    input_box_pass = pygame.Rect(MENU_WIDTH//2 - 250, MENU_HEIGHT//2 + 10, 500, 70)
-    
+
+    # register inputs
+    input_w = int(MENU_WIDTH * 0.40)
+    input_h = int(MENU_HEIGHT * 0.10) 
+    center_x = (MENU_WIDTH - input_w) // 2
+    spacing = int(MENU_HEIGHT * 0.04)
+
+    # positions aligned with register_screen
+    user_top = MENU_HEIGHT//2 - 80
+    pass_top = user_top + input_h + spacing
+
+    BASE_Y = MENU_HEIGHT//2 - 220   
+
+    input_box_user = pygame.Rect(center_x, BASE_Y, input_w, input_h)
+    input_box_pass = pygame.Rect(center_x, BASE_Y + input_h + spacing, input_w, input_h)
+
+
+    # buttons
+    button_h = 70
+    button_w = input_w // 2 - 10   # chia ô input thành 2 nút 
+    gap = 20                       # khoảng cách giữa 2 nút
+
+    row_y = input_box_pass.bottom + spacing   # đặt nút ngay dưới ô password
+
+    # Cao bằng ô input
+    button_h = input_h
+
+    # Bo 2 nút vừa đúng chiều rộng = input_w
+    button_w = input_w // 2 - 10
+    row_y = input_box_pass.bottom + spacing   # chỉnh vị trí cao thấp 
+
     btn_login = Button(
-        (MENU_WIDTH//2 - 250, MENU_HEIGHT//2 + 120, 240, 70), 
+        (center_x, row_y, button_w, button_h),
         "Login"
     )
+
     btn_register = Button(
-        (MENU_WIDTH//2 + 10, MENU_HEIGHT//2 + 120, 240, 70), 
+        (center_x + button_w + gap, row_y, button_w, button_h),
         "Register"
     )
+
+    back_y = row_y + button_h + spacing   
+
     btn_back = Button(
-        (MENU_WIDTH//2 - 150, MENU_HEIGHT//2 + 210, 300, 60), 
+        (center_x, back_y, input_w, input_h),   
         "Back",
         color=EXIT_BUTTON_COLOR,
         hover_color=EXIT_BUTTON_HOVER_COLOR
@@ -145,59 +184,59 @@ def login_screen():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 exit()
-            
+
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    return False  # Quay lại pre-login menu, không login
-                
+                    return False  # back to pre-login
+
                 if active_user:
                     if event.key == pygame.K_BACKSPACE:
                         username = username[:-1]
-                    elif event.key == pygame.K_RETURN or event.key == pygame.K_TAB:
+                    elif event.key in (pygame.K_RETURN, pygame.K_TAB):
                         active_user = False
                         active_pass = True
-                    elif len(username) < 20:
-                        username += event.unicode
-                
+                    else:
+                        if event.unicode and event.unicode.isprintable():
+                            username += event.unicode
+
+
                 elif active_pass:
                     if event.key == pygame.K_BACKSPACE:
                         password = password[:-1]
+                    elif event.key == pygame.K_TAB:
+                        active_pass = False
+                        active_user = True
                     elif event.key == pygame.K_RETURN:
                         if username and password:
                             message = "Connecting to server..."
                             message_color = TEXT_COLOR
                             pygame.display.flip()
-                            
+
                             success, msg = send_auth_request("LOGIN", username, password)
                             if success:
                                 current_user = username
                                 is_logged_in = True
-                                # Success animation
                                 SCREEN.fill((30, 30, 50))
                                 success_surf = font_title.render(f"Welcome, {username}!", True, SUCCESS_COLOR)
                                 SCREEN.blit(success_surf, success_surf.get_rect(center=(MENU_WIDTH//2, MENU_HEIGHT//2)))
                                 pygame.display.flip()
                                 pygame.time.wait(1500)
-                                return True  # Login thành công, chuyển sang main menu
+                                return True
                             else:
                                 message = msg
                                 message_color = ERROR_COLOR
-                    elif event.key == pygame.K_TAB:
-                        active_pass = False
-                        active_user = True
-                    elif len(password) < 30:
-                        password += event.unicode
+                    else:
+                        if event.unicode and event.unicode.isprintable():
+                            password += event.unicode
+
 
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if input_box_user.collidepoint(event.pos):
-                    active_user = True
-                    active_pass = False
+                    active_user, active_pass = True, False
                 elif input_box_pass.collidepoint(event.pos):
-                    active_pass = True
-                    active_user = False
+                    active_user, active_pass = False, True
                 else:
-                    active_user = False
-                    active_pass = False
+                    active_user, active_pass = False, False
 
                 if btn_login.is_clicked(event):
                     if not username or not password:
@@ -207,7 +246,7 @@ def login_screen():
                         message = "Connecting to server..."
                         message_color = TEXT_COLOR
                         pygame.display.flip()
-                        
+
                         success, msg = send_auth_request("LOGIN", username, password)
                         if success:
                             current_user = username
@@ -217,57 +256,61 @@ def login_screen():
                             SCREEN.blit(success_surf, success_surf.get_rect(center=(MENU_WIDTH//2, MENU_HEIGHT//2)))
                             pygame.display.flip()
                             pygame.time.wait(1500)
-                            return True  # Login thành công
+                            return True
                         else:
-                            message = msg              # ← THÊM DÒNG NÀY
+                            message = msg
                             message_color = ERROR_COLOR
 
                 if btn_register.is_clicked(event):
-                    if register_screen():  # Nếu register thành công
+                    if register_screen():  # nếu register thành công
                         message = "Account created! Please login."
                         message_color = SUCCESS_COLOR
                         username = ""
                         password = ""
-                
+
                 if btn_back.is_clicked(event):
-                    return False  # Quay lại pre-login menu
+                    return False
 
         # Draw UI
         title_surf = font_title.render("LOGIN", True, TITLE_COLOR)
-        title_rect = title_surf.get_rect(center=(MENU_WIDTH//2, MENU_HEIGHT//2 - 250))
+        title_rect = title_surf.get_rect(center=(MENU_WIDTH//2, int(MENU_HEIGHT * 0.20)))
         SCREEN.blit(title_surf, title_rect)
 
         # Username box
         color_user = (100, 120, 180) if active_user else (60, 70, 90)
         pygame.draw.rect(SCREEN, color_user, input_box_user, 0, 10)
         pygame.draw.rect(SCREEN, (150, 150, 200) if active_user else (100, 100, 120), input_box_user, 3, 10)
-        
         user_display = username if username else "Username"
-        user_text_color = TEXT_COLOR if username else (120, 120, 140)
-        user_surf = font_button.render(user_display, True, user_text_color)
-        SCREEN.blit(user_surf, (input_box_user.x + 15, input_box_user.y + 18))
+        if username:
+            user_text_color = TEXT_COLOR
+        else:
+            user_text_color = (200, 200, 220) if active_user else (120, 120, 140)
+        user_surf = render_scrolled(font_button, user_display, input_box_user.width - 30, user_text_color)
+        SCREEN.blit(user_surf, (input_box_user.x + 15, input_box_user.y + (input_h - user_surf.get_height())//2))
 
         # Password box
         color_pass = (100, 120, 180) if active_pass else (60, 70, 90)
         pygame.draw.rect(SCREEN, color_pass, input_box_pass, 0, 10)
         pygame.draw.rect(SCREEN, (150, 150, 200) if active_pass else (100, 100, 120), input_box_pass, 3, 10)
-        
         pass_display = "•" * len(password) if password else "Password"
-        pass_text_color = TEXT_COLOR if password else (120, 120, 140)
-        pass_surf = font_button.render(pass_display, True, pass_text_color)
-        SCREEN.blit(pass_surf, (input_box_pass.x + 15, input_box_pass.y + 18))
+        if password:
+            pass_text_color = TEXT_COLOR
+        else:
+            pass_text_color = (200, 200, 220) if active_pass else (120, 120, 140)
+
+        pass_surf = render_scrolled(font_button, pass_display, input_box_pass.width - 30, pass_text_color)
+        SCREEN.blit(pass_surf, (input_box_pass.x + 15, input_box_pass.y + (input_h - pass_surf.get_height())//2))
 
         # Message
         if message:
             msg_surf = font_small.render(message, True, message_color)
-            msg_rect = msg_surf.get_rect(center=(MENU_WIDTH//2, MENU_HEIGHT//2 + 320))
+            msg_rect = msg_surf.get_rect(center=(MENU_WIDTH//2, pass_top + input_h*2 + spacing*2))
             SCREEN.blit(msg_surf, msg_rect)
 
         # Buttons
         btn_login.is_hovered(mouse_pos)
         btn_register.is_hovered(mouse_pos)
         btn_back.is_hovered(mouse_pos)
-        
         btn_login.draw(SCREEN)
         btn_register.draw(SCREEN)
         btn_back.draw(SCREEN)
@@ -281,26 +324,51 @@ def login_screen():
         clock.tick(60)
 
 
+
 def register_screen():
     """Màn hình đăng ký - Returns True nếu thành công"""
-    input_box_user = pygame.Rect(MENU_WIDTH//2 - 250, MENU_HEIGHT//2 - 120, 500, 70)
-    input_box_pass = pygame.Rect(MENU_WIDTH//2 - 250, MENU_HEIGHT//2 + 10, 500, 70)
-    
+    input_w = int(MENU_WIDTH * 0.40)
+    input_h = int(MENU_HEIGHT * 0.10) 
+    center_x = (MENU_WIDTH - input_w) // 2
+    spacing = int(MENU_HEIGHT * 0.04)
+
+    BASE_Y = MENU_HEIGHT//2 - 220   # chỉnh lên/xuống 
+
+    # 3 ô input: username, password, confirm
+    input_box_user    = pygame.Rect(center_x, BASE_Y, input_w, input_h)
+    input_box_pass    = pygame.Rect(center_x, BASE_Y + (input_h + spacing), input_w, input_h)
+    input_box_confirm = pygame.Rect(center_x, BASE_Y + (input_h + spacing)*2, input_w, input_h)
+
+    register_y = input_box_confirm.bottom + spacing
+    button_h = input_h
+    button_w = input_w // 2 - 10
+    gap = 20
+
+    row_y = input_box_confirm.bottom + spacing  
+
     btn_register = Button(
-        (MENU_WIDTH//2 - 250, MENU_HEIGHT//2 + 120, 500, 70), 
-        "Create Account"
+        (center_x, row_y, button_w, button_h),
+        "Register"
     )
+
     btn_back = Button(
-        (MENU_WIDTH//2 - 150, MENU_HEIGHT//2 + 210, 300, 60), 
-        "Back to Login",
+        (center_x + button_w + gap, row_y, button_w, button_h),
+        "Back",
         color=EXIT_BUTTON_COLOR,
         hover_color=EXIT_BUTTON_HOVER_COLOR
     )
 
+    # vị trí để vẽ message
+    msg_y = row_y + button_h + spacing
+
+
     username = ""
     password = ""
+    confirm_password = ""
     active_user = True
     active_pass = False
+    active_confirm = False
+
     message = ""
     message_color = ERROR_COLOR
     clock = pygame.time.Clock()
@@ -313,29 +381,54 @@ def register_screen():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 exit()
-            
+
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     return False
-                
+
                 if active_user:
                     if event.key == pygame.K_BACKSPACE:
                         username = username[:-1]
-                    elif event.key == pygame.K_RETURN or event.key == pygame.K_TAB:
+                    elif event.key in (pygame.K_RETURN, pygame.K_TAB):
                         active_user = False
                         active_pass = True
-                    elif len(username) < 20:
-                        username += event.unicode
-                
+                        active_confirm = False
+                    else:
+                        if event.unicode and event.unicode.isprintable():
+                            username += event.unicode
+
+
                 elif active_pass:
                     if event.key == pygame.K_BACKSPACE:
                         password = password[:-1]
+                    elif event.key in (pygame.K_RETURN, pygame.K_TAB):
+                        # chuyển qua confirm nếu Tab / Enter
+                        active_pass = False
+                        active_confirm = True
+                    else:
+                        if event.unicode and event.unicode.isprintable():
+                            password += event.unicode
+
+
+                elif active_confirm:
+                    if event.key == pygame.K_BACKSPACE:
+                        confirm_password = confirm_password[:-1]
+                    elif event.key == pygame.K_TAB:
+                        # quay vòng về user
+                        active_confirm = False
+                        active_user = True
                     elif event.key == pygame.K_RETURN:
-                        if username and password:
+                        # khi Enter ở ô confirm => thực hiện đăng ký (với kiểm tra)
+                        if not username or not password or not confirm_password:
+                            message = "Please fill all fields"
+                            message_color = ERROR_COLOR
+                        elif password != confirm_password:
+                            message = "Passwords do not match!"
+                            message_color = ERROR_COLOR
+                        else:
                             message = "Creating account..."
                             message_color = TEXT_COLOR
                             pygame.display.flip()
-                            
                             success, msg = send_auth_request("REGISTER", username, password)
                             if success:
                                 SCREEN.fill((40, 40, 60))
@@ -349,32 +442,34 @@ def register_screen():
                             else:
                                 message = msg
                                 message_color = ERROR_COLOR
-                    elif event.key == pygame.K_TAB:
-                        active_pass = False
-                        active_user = True
-                    elif len(password) < 30:
-                        password += event.unicode
+                    else:
+                        if event.unicode and event.unicode.isprintable():
+                            confirm_password += event.unicode
+
 
             if event.type == pygame.MOUSEBUTTONDOWN:
+                # set active field theo click
                 if input_box_user.collidepoint(event.pos):
-                    active_user = True
-                    active_pass = False
+                    active_user, active_pass, active_confirm = True, False, False
                 elif input_box_pass.collidepoint(event.pos):
-                    active_pass = True
-                    active_user = False
+                    active_user, active_pass, active_confirm = False, True, False
+                elif input_box_confirm.collidepoint(event.pos):
+                    active_user, active_pass, active_confirm = False, False, True
                 else:
-                    active_user = False
-                    active_pass = False
+                    active_user, active_pass, active_confirm = False, False, False
 
+                # nút register
                 if btn_register.is_clicked(event):
-                    if not username or not password:
-                        message = "Please enter both username and password"
+                    if not username or not password or not confirm_password:
+                        message = "Please fill all fields"
+                        message_color = ERROR_COLOR
+                    elif password != confirm_password:
+                        message = "Passwords do not match!"
                         message_color = ERROR_COLOR
                     else:
                         message = "Creating account..."
                         message_color = TEXT_COLOR
                         pygame.display.flip()
-                        
                         success, msg = send_auth_request("REGISTER", username, password)
                         if success:
                             SCREEN.fill((40, 40, 60))
@@ -389,35 +484,54 @@ def register_screen():
                 if btn_back.is_clicked(event):
                     return False
 
-        # Draw UI
-        title_surf = font_title.render("CREATE ACCOUNT", True, TITLE_COLOR)
-        title_rect = title_surf.get_rect(center=(MENU_WIDTH//2, MENU_HEIGHT//2 - 250))
+        # ---------- DRAW UI ----------
+        title_surf = font_title.render("REGISTER", True, TITLE_COLOR)
+        title_rect = title_surf.get_rect(center=(MENU_WIDTH//2, int(MENU_HEIGHT * 0.20)))
         SCREEN.blit(title_surf, title_rect)
 
-        # Username
+        # Username box
         color_user = (100, 120, 180) if active_user else (60, 70, 90)
         pygame.draw.rect(SCREEN, color_user, input_box_user, 0, 10)
         pygame.draw.rect(SCREEN, (150, 150, 200) if active_user else (100, 100, 120), input_box_user, 3, 10)
-        
         user_display = username if username else "Username"
-        user_text_color = TEXT_COLOR if username else (120, 120, 140)
-        user_surf = font_button.render(user_display, True, user_text_color)
-        SCREEN.blit(user_surf, (input_box_user.x + 15, input_box_user.y + 18))
+        if username:
+            user_text_color = TEXT_COLOR
+        else:
+            user_text_color = (200, 200, 220) if active_user else (120, 120, 140)
 
-        # Password
+        user_surf = render_scrolled(font_button, user_display, input_box_user.width - 30, user_text_color)
+        SCREEN.blit(user_surf, (input_box_user.x + 15, input_box_user.y + (input_h - user_surf.get_height())//2))
+
+        # Password box
         color_pass = (100, 120, 180) if active_pass else (60, 70, 90)
         pygame.draw.rect(SCREEN, color_pass, input_box_pass, 0, 10)
         pygame.draw.rect(SCREEN, (150, 150, 200) if active_pass else (100, 100, 120), input_box_pass, 3, 10)
-        
         pass_display = "•" * len(password) if password else "Password"
-        pass_text_color = TEXT_COLOR if password else (120, 120, 140)
-        pass_surf = font_button.render(pass_display, True, pass_text_color)
-        SCREEN.blit(pass_surf, (input_box_pass.x + 15, input_box_pass.y + 18))
+        if password:
+            pass_text_color = TEXT_COLOR
+        else:
+            pass_text_color = (200, 200, 220) if active_pass else (120, 120, 140)
+
+        pass_surf = render_scrolled(font_button, pass_display, input_box_pass.width - 30, pass_text_color)
+        SCREEN.blit(pass_surf, (input_box_pass.x + 15, input_box_pass.y + (input_h - pass_surf.get_height())//2))
+
+        # Confirm password box
+        color_confirm = (100, 120, 180) if active_confirm else (60, 70, 90)
+        pygame.draw.rect(SCREEN, color_confirm, input_box_confirm, 0, 10)
+        pygame.draw.rect(SCREEN, (150, 150, 200) if active_confirm else (100, 100, 120), input_box_confirm, 3, 10)
+        confirm_display = "•" * len(confirm_password) if confirm_password else "Confirm Password"
+        if confirm_password:
+            confirm_color = TEXT_COLOR
+        else:
+            confirm_color = (200, 200, 220) if active_confirm else (120, 120, 140)
+
+        confirm_surf = render_scrolled(font_button, confirm_display, input_box_confirm.width - 30, confirm_color)
+        SCREEN.blit(confirm_surf, (input_box_confirm.x + 15, input_box_confirm.y + (input_h - confirm_surf.get_height())//2))
 
         # Message
         if message:
             msg_surf = font_small.render(message, True, message_color)
-            msg_rect = msg_surf.get_rect(center=(MENU_WIDTH//2, MENU_HEIGHT//2 + 300))
+            msg_rect = msg_surf.get_rect(center=(MENU_WIDTH // 2, msg_y))
             SCREEN.blit(msg_surf, msg_rect)
 
         # Buttons
@@ -432,6 +546,7 @@ def register_screen():
 
         pygame.display.flip()
         clock.tick(60)
+
 
 
 def pre_login_menu():
