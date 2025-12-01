@@ -26,7 +26,7 @@ static void *client_thread(void *arg)
 
         char cmd[32], user[64], pass[64];
         /* format: CMD|username|password */
-        if (sscanf(buffer, "%31[^|]|%63[^|]|%63[^|]", cmd, user, pass) == 3)
+        if(sscanf(buffer, "%31[^|]|%63[^|]|%63[^|]", cmd, user, pass) == 3)
         {
 
             if (strcmp(cmd, "LOGIN") == 0)
