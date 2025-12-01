@@ -1,5 +1,7 @@
 import pygame
 import socket
+import time
+from network_client import NetworkClient
 
 pygame.init()
 pygame.font.init()
@@ -42,7 +44,9 @@ def render_scrolled(font, text, max_width, color):
 
 # GLOBAL SESSION MANAGEMENT
 current_user = None
+current_password = None  # giữ password tạm trong session để login socket gameplay
 is_logged_in = False
+
 
 
 class Button:
@@ -69,15 +73,18 @@ class Button:
         return event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.hovered
 
 
-def launch_game():
-    """Khởi động game PvP"""
-    from battleship_gui import run_game_loop
-    run_game_loop(True, True)
-    
-    # Khôi phục màn hình menu
-    global SCREEN
-    SCREEN = pygame.display.set_mode((MENU_WIDTH, MENU_HEIGHT), pygame.FULLSCREEN)
-    pygame.display.set_caption("Battleship - Main Menu")
+def launch_game(mode):
+    print("DEBUG: launch_game() called")   # PRINT 1
+
+    from online_battleship_gui import run_online_game
+    print("DEBUG: imported online_battleship_gui")  # PRINT 2
+
+    global SCREEN, current_user, current_password
+
+    print("DEBUG: current_user =", current_user)    # PRINT 3
+
+    run_online_game(current_user, current_password, mode)
+    print("DEBUG: returned from run_online_game")   # PRINT 4
 
 
 def send_auth_request(command, username, password):
@@ -215,6 +222,7 @@ def login_screen():
                             success, msg = send_auth_request("LOGIN", username, password)
                             if success:
                                 current_user = username
+                                current_password = password
                                 is_logged_in = True
                                 SCREEN.fill((30, 30, 50))
                                 success_surf = font_title.render(f"Welcome, {username}!", True, SUCCESS_COLOR)
@@ -626,18 +634,23 @@ def main_menu():
     start_y = title_y_pos + int(MENU_HEIGHT * 0.12)
 
     buttons = {
-        "pvp": Button(
+        "pvp_rank": Button(
             ((MENU_WIDTH - button_width) // 2, start_y, button_width, button_height),
-            "PvP Online"
+            "PvP - Ranked (ELO)"
         ),
-        "logout": Button(
+        "pvp_open": Button(
             ((MENU_WIDTH - button_width) // 2, start_y + (button_height + spacing), button_width, button_height),
+            "PvP - Open Rank"
+        ),
+        
+        "logout": Button(
+            ((MENU_WIDTH - button_width) // 2, start_y + (button_height + spacing)*2, button_width, button_height),
             "Logout",
             color=LOGOUT_BUTTON_COLOR,
             hover_color=LOGOUT_BUTTON_HOVER_COLOR
         ),
         "exit": Button(
-            ((MENU_WIDTH - button_width) // 2, start_y + (button_height + spacing) * 2, button_width, button_height),
+            ((MENU_WIDTH - button_width) // 2, start_y + (button_height + spacing) * 3, button_width, button_height),
             "Exit Game",
             color=EXIT_BUTTON_COLOR,
             hover_color=EXIT_BUTTON_HOVER_COLOR
@@ -675,8 +688,10 @@ def main_menu():
 
             for key, btn in buttons.items():
                 if btn.is_clicked(event):
-                    if key == "pvp":
-                        launch_game()
+                    if key == "pvp_open":
+                        launch_game("open")
+                    elif key == "pvp_rank":
+                        launch_game("rank")
                     elif key == "logout":
                         # Logout animation
                         SCREEN.fill(BG_COLOR)
@@ -711,3 +726,7 @@ if __name__ == "__main__":
             main_menu()  
         else:
             break  
+        
+        
+        
+        
