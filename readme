@@ -1,0 +1,14 @@
+//TAI SQLITE TREN UBUNTU
+
+//1. sudo apt install sqlite3         //kiem tra xem da co chua:  sqlite3 --version
+//2. sudo apt install libsqlite3-dev  //Cài thư viện dev để compile trong C
+
+
+//KET NOI DB VA THIET LAP TCP SERVER
+
+//1. ae vao thu muc server/ tren terminal
+//2. nhap: sqlite3 battleship.db     //kiem tra: PRAGMA database_list; neu hien kieu server/battleship.db la duoc
+//3. thoat sqlite3 ra roi nhap: ./server //hien Database connected!SERVER STARTED ON PORT 5050 la thanh cong
+//4. mo 1 terminal khac van trong thu muc server/ roi nhap: telnet 127.0.0.1 5050 //check terminal con lai ma thay: New client connected! la oke r 
+//trong db moi co bang user thoi, cac bang khac chua co, de huy xong login da roi tinh tiep
+
