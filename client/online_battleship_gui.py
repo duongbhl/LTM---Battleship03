@@ -87,6 +87,9 @@ def draw_grid(board, x0, y0, title_text):
 
 def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
     net = NetworkClient(host, port)
+    my_elo = "?"
+    opponent_elo = "?"
+
 
     # GAME STATE
     phase = "queue_wait_send"       # login → queue_wait_send → queue → playing → gameover
@@ -110,66 +113,75 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
 
         # ----- RECEIVE MESSAGES -----
         msg = net.read_nowait()
+        
         while msg is not None:
-            print("[CLIENT RECV]", msg)
-            parts = msg.split("|")
-            cmd = parts[0]
+            lines = msg.split("\n")
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                print("[CLIENT PARSED LINE]", line)
+                parts = line.split("|")
+                cmd = parts[0]
 
-            if cmd == "LOGIN_OK":
-                message = "Login OK. Searching for match..."
-                message_color = GOOD
-                phase = "queue_wait_send"   # CHUYỂN QUA TRẠNG THÁI CHỜ GỬI 
+                if cmd == "LOGIN_OK":
+                    my_elo = parts[1] if len(parts) >= 2 else "?"
+                    message = "Login OK. Searching for match..."
+                    message_color = GOOD
+                    phase = "queue_wait_send"   # CHUYỂN QUA TRẠNG THÁI CHỜ GỬI 
             
-            elif cmd == "LOGIN_FAIL":
-                phase = "error"
-                message = "Login failed"
-                continue
+                elif cmd == "LOGIN_FAIL":
+                    phase = "error"
+                    message = "Login failed"
+                    continue
 
 
-            elif cmd == "QUEUED":
-                message = "Waiting for opponent..."
-                message_color = (180, 180, 255)
-                phase = "queue"
+                elif cmd == "QUEUED":
+                    message = "Waiting for opponent..."
+                    message_color = (180, 180, 255)
+                    phase = "queue"
 
-            elif cmd == "MATCH_FOUND":
-                if len(parts) >= 3:
-                    opponent = parts[1]
-                    my_turn = parts[2] == "1"
-                    phase = "playing"
-                    message = f"Matched with {opponent}. " + ("Your turn!" if my_turn else "Opponent's turn...")
+                elif cmd == "MATCH_FOUND":
+                    if len(parts) >= 4:
+                        opponent = parts[1]
+                        opponent_elo = parts[2]
+                        my_turn = parts[3] == "1"
+                        phase = "playing"
+                        message = f"Matched with {opponent}. " + ("Your turn!" if my_turn else "Opponent's turn...")
+                        message_color = GOOD
+
+                elif cmd == "YOUR_TURN":
+                    my_turn = True
+                    message = "Your turn!"
                     message_color = GOOD
 
-            elif cmd == "YOUR_TURN":
-                my_turn = True
-                message = "Your turn!"
-                message_color = GOOD
+                elif cmd == "OPPONENT_TURN":
+                    my_turn = False
+                    message = "Opponent's turn..."
+                    message_color = TEXT
 
-            elif cmd == "OPPONENT_TURN":
-                my_turn = False
-                message = "Opponent's turn..."
-                message_color = TEXT
+                elif cmd == "MOVE_RESULT":
+                    if len(parts) >= 5:
+                        x = int(parts[1])
+                        y = int(parts[2])
+                        idx = y * 10 + x
+                        enemy_board[idx] = "H" if parts[3] == "HIT" else "M"
+                        status = parts[4].split("=")[-1]
+                        if status == "WIN":
+                            phase = "gameover"
+                            result = "WIN"
 
-            elif cmd == "MOVE_RESULT":
-                if len(parts) >= 5:
-                    x = int(parts[1])
-                    y = int(parts[2])
-                    idx = y * 10 + x
-                    enemy_board[idx] = "H" if parts[3] == "HIT" else "M"
-                    status = parts[4].split("=")[-1]
-                    if status == "WIN":
-                        phase = "gameover"
-                        result = "WIN"
-
-            elif cmd == "OPPONENT_MOVE":
-                if len(parts) >= 5:
-                    x = int(parts[1])
-                    y = int(parts[2])
-                    idx = y * 10 + x
-                    my_board[idx] = "H" if parts[3] == "HIT" else "M"
-                    status = parts[4].split("=")[-1]
-                    if status == "LOSE":
-                        phase = "gameover"
-                        result = "LOSE"
+                elif cmd == "OPPONENT_MOVE":
+                    if len(parts) >= 5:
+                        x = int(parts[1])
+                        y = int(parts[2])
+                        idx = y * 10 + x
+                        my_board[idx] = "H" if parts[3] == "HIT" else "M"
+                        status = parts[4].split("=")[-1]
+                        if status == "LOSE":
+                            phase = "gameover"
+                            result = "LOSE"
 
             msg = net.read_nowait()
 
@@ -207,10 +219,11 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
         title_surf = font_title.render("Battleship Online", True, TITLE)
         SCREEN.blit(title_surf, title_surf.get_rect(center=(REAL_WIDTH//2, TOP_BANNER_HEIGHT//2)))
 
-        info = f"You: {username}"
+        info = f"You: {username} ({my_elo})"
         if phase in ("playing", "gameover"):
-            info += f" | Opponent: {opponent}"
+            info += f" | Opponent: {opponent} ({opponent_elo})"
         SCREEN.blit(font_small.render(info, True, TEXT), (SIDE_PADDING, TOP_BANNER_HEIGHT - 25))
+
 
         if message:
             SCREEN.blit(font_text.render(message, True, message_color), (SIDE_PADDING, TOP_BANNER_HEIGHT + 40))

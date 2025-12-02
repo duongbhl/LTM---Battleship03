@@ -1,15 +1,22 @@
 #ifndef DATABASE_H
 #define DATABASE_H
 
+#include <stddef.h>
 #include <sqlite3.h>
 
+extern sqlite3* g_db;
 
-void db_init();
-void db_close();
+int db_init(const char* filename);
+void db_close(void);
 
-int db_register(const char* user, const char* pass);
-int db_login(const char* user, const char* pass);
+int db_register_user(const char* user, const char* pass,
+                     char* errbuf, size_t errsz);
 
-extern sqlite3* db;
+int db_login_user(const char* user, const char* pass,
+                  int* out_elo,
+                  char* errbuf, size_t errsz);
+                  
+int db_get_elo(const char *username);
+
 
 #endif
