@@ -125,7 +125,7 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
                 if cmd == "LOGIN_OK":
                     message = "Login OK. Searching for match..."
                     message_color = GOOD
-                    phase = "queue_wait_send"   # CHUYỂN QUA TRẠNG THÁI CHỜ GỬI 
+                    
             
                 elif cmd == "LOGIN_FAIL":
                     phase = "error"
@@ -134,9 +134,10 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
 
 
                 elif cmd == "QUEUED":
-                    message = "Waiting for opponent..."
-                    message_color = (180, 180, 255)
-                    phase = "queue"
+                    if phase not in ("playing", "gameover"):
+                        message = "Waiting for opponent..."
+                        message_color = (180, 180, 255)
+                        phase = "queue"
 
                 elif cmd == "MATCH_FOUND":
                     if len(parts) >= 3:
@@ -184,7 +185,7 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
         if phase == "queue_wait_send" and not sent_find:
             net.send(f"FIND_MATCH|{username}|{mode}")
             sent_find = True
-            phase = "queue"
+
 
         # ----- EVENTS -----
         for ev in pygame.event.get():
@@ -223,14 +224,21 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
             SCREEN.blit(font_text.render(message, True, message_color), (SIDE_PADDING, TOP_BANNER_HEIGHT + 40))
 
         # Board
-        if phase in ("playing", "gameover"):
-            draw_grid(my_board, LEFT_GRID_X, GRID_Y, "Your board (opponent shots)")
-            draw_grid(enemy_board, RIGHT_GRID_X, GRID_Y, "Enemy board (your shots)" + (" - YOUR TURN" if my_turn else ""))
-        else:
-            center_msg = "Finding opponent..." if phase.startswith("queue") else "Connecting to server..."
+        if phase.startswith("queue"):
+            center_msg = "Finding opponent..."
             SCREEN.blit(font_title.render(center_msg, True, (200, 200, 255)),
-                        (REAL_WIDTH//2 - 200, REAL_HEIGHT//2 - 40))
+                (REAL_WIDTH//2 - 200, REAL_HEIGHT//2 - 40))
 
+        elif phase == "connecting":
+             SCREEN.blit(font_title.render("Connecting...", True, (200, 200, 255)),
+            (REAL_WIDTH//2 - 200, REAL_HEIGHT//2 - 40))
+
+        else:
+        # playing + gameover
+            draw_grid(my_board, LEFT_GRID_X, GRID_Y, "Your board (opponent shots)")
+            draw_grid(enemy_board, RIGHT_GRID_X, GRID_Y,
+              "Enemy board (your shots)" + (" - YOUR TURN" if my_turn else ""))
+            
         # Game over
         if phase == "gameover" and result:
             col = GOOD if result == "WIN" else BAD
