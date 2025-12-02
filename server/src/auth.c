@@ -13,12 +13,12 @@ void handle_login(int sock, const char *user, const char *pass)
     if (db_login_user(user, pass, &elo, err, sizeof(err)) == 0) {
         // LOGIN_OK|message
         char msg[128];
-        snprintf(msg, sizeof(msg), "LOGIN_OK|%d", elo);
+        snprintf(msg, sizeof(msg), "LOGIN_OK|%d\n", elo);
         send_all(sock, msg, strlen(msg));
     } else {
         // LOGIN_FAIL|reason
         char msg[256];
-        snprintf(msg, sizeof(msg), "LOGIN_FAIL|%s", err);
+        snprintf(msg, sizeof(msg), "LOGIN_FAIL|%s\n", err);
         send_all(sock, msg, strlen(msg));
     }
 }

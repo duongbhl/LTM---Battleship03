@@ -85,11 +85,11 @@ def draw_grid(board, x0, y0, title_text):
             pygame.draw.rect(SCREEN, WHITE, (rx, ry, GRID_SIZE, GRID_SIZE), 1)
 
 
-def run_online_game(username, password, mode="open", host="127.0.0.1", port=5050):
+def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
     net = NetworkClient(host, port)
 
     # GAME STATE
-    phase = "login"            # login → queue_wait_send → queue → playing → gameover
+    phase = "queue_wait_send"       # login → queue_wait_send → queue → playing → gameover
     sent_find = False          # chỉ gửi FIND_MATCH 1 lần
     message = "Connecting to server..."
     message_color = TEXT
@@ -99,8 +99,7 @@ def run_online_game(username, password, mode="open", host="127.0.0.1", port=5050
     enemy_board = ["U"] * 100
     result = None
 
-    # Gửi LOGIN ngay khi kết nối
-    net.send(f"LOGIN|{username}|{password}")
+    
 
     clock = pygame.time.Clock()
     exit_button = Button((REAL_WIDTH - 180, 20, 160, 40), "Back to Menu")
@@ -119,7 +118,13 @@ def run_online_game(username, password, mode="open", host="127.0.0.1", port=5050
             if cmd == "LOGIN_OK":
                 message = "Login OK. Searching for match..."
                 message_color = GOOD
-                phase = "queue_wait_send"   # CHUYỂN QUA TRẠNG THÁI CHỜ GỬI
+                phase = "queue_wait_send"   # CHUYỂN QUA TRẠNG THÁI CHỜ GỬI 
+            
+            elif cmd == "LOGIN_FAIL":
+                phase = "error"
+                message = "Login failed"
+                continue
+
 
             elif cmd == "QUEUED":
                 message = "Waiting for opponent..."
@@ -170,11 +175,7 @@ def run_online_game(username, password, mode="open", host="127.0.0.1", port=5050
 
         # ----- SEND FIND_MATCH (CHUẨN 100%) -----
         if phase == "queue_wait_send" and not sent_find:
-            if mode == "ranked":
-                net.send(f"FIND_MATCH|{username}|ELO")
-            else:
-                net.send(f"FIND_MATCH|{username}|OPEN")
-
+            net.send(f"FIND_MATCH|{username}|{mode}")
             sent_find = True
             phase = "queue"
 

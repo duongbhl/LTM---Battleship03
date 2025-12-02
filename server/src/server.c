@@ -66,22 +66,18 @@ static void *client_thread(void *arg)
             handle_register(sock, a, b);
             continue;
         }
-        else if (strcmp(cmd, "FIND_MATCH") == 0)
+        else if (strcmp(cmd, "FIND_MATCH") == 0 && parts >= 3)
         {
-            printf("[SERVER] FIND_MATCH received: user=%s mode=%s sock=%d\n", a, b, sock);
+            char *username = a;
+            char *mode = b; // "rank" hoặc "open"
 
-            if (parts < 3)
-            {
-                send_all(sock, "ERROR|Missing match mode\n", 26);
-                continue;
-            }
+            int elo = db_get_elo(username);
 
-            int elo_mode = atoi(b); // 0=open, 1=elo
-            int elo = db_get_elo(a);
+            if (strcmp(mode, "rank") == 0)
+                mm_request_match(sock, username, elo, 1);
+            else
+                mm_request_match(sock, username, elo, 0);
 
-            printf("[MATCH] %s requested match (ELO %d, mode=%d)\n", a, elo, elo_mode);
-
-            mm_request_match(sock, a, elo, elo_mode);
             continue;
         }
 

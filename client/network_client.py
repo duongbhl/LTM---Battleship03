@@ -22,6 +22,7 @@ class NetworkClient:
                 if not data:
                     self.alive = False
                     break
+                print("RAW RECV:", repr(data.decode()))
                 buffer += data.decode()
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)

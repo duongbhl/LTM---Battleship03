@@ -82,6 +82,7 @@ def launch_game(mode):
     global SCREEN, current_user, current_password
 
     print("DEBUG: current_user =", current_user)    # PRINT 3
+    print("DEBUG: current_pass =", current_password)    # PRINT 3
 
     run_online_game(current_user, current_password, mode)
     print("DEBUG: returned from run_online_game")   # PRINT 4
@@ -124,7 +125,7 @@ def send_auth_request(command, username, password):
 
 def login_screen():
     """Màn hình đăng nhập"""
-    global current_user, is_logged_in
+    global current_user,current_password,is_logged_in
 
     # register inputs
     input_w = int(MENU_WIDTH * 0.40)
@@ -258,6 +259,7 @@ def login_screen():
                         success, msg = send_auth_request("LOGIN", username, password)
                         if success:
                             current_user = username
+                            current_password = password
                             is_logged_in = True
                             SCREEN.fill((30, 30, 50))
                             success_surf = font_title.render(f"Welcome, {username}!", True, SUCCESS_COLOR)
@@ -689,9 +691,9 @@ def main_menu():
             for key, btn in buttons.items():
                 if btn.is_clicked(event):
                     if key == "pvp_open":
-                        launch_game("open")
+                        launch_game(0)
                     elif key == "pvp_rank":
-                        launch_game("rank")
+                        launch_game(1)
                     elif key == "logout":
                         # Logout animation
                         SCREEN.fill(BG_COLOR)
