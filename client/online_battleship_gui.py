@@ -150,11 +150,16 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
                         phase = "playing"
                         message = f"Matched with {opponent}. " + ("Your turn!" if my_turn else "Opponent's turn...")
                         message_color = GOOD
+                        
 
                 elif cmd == "YOUR_TURN":
                     my_turn = True
                     message = "Your turn!"
                     message_color = GOOD
+
+                elif cmd == "SEND_BOARD":
+                    csv = ",".join(my_board)
+                    net.send(f"BOARD|{csv}")
 
                 elif cmd == "OPPONENT_TURN":
                     my_turn = False
