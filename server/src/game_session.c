@@ -74,9 +74,24 @@ void gs_set_board(int sock, const char *csv)
 
     // Khi cả 2 đã sẵn sàng → thông báo bắt đầu game
     if (g->ready1 && g->ready2) {
-        send_all(g->p1, "YOUR_TURN\n", 10);
-        send_all(g->p2, "OPPONENT_TURN\n", 14);
+        // Gửi TURN cho từng client — gửi tên người chơi kèm "_TURN\n"
+        char turn_msg1[64], turn_msg2[64];
+        snprintf(turn_msg1, sizeof(turn_msg1), "%s_TURN\n", g->user1);
+        snprintf(turn_msg2, sizeof(turn_msg2), "%s_TURN\n", g->user2);
+
+        // Send appropriate turn messages based on g->turn (1 => player1 first)
+        if (g->turn == 1) {
+            send_all(g->p1, turn_msg1, strlen(turn_msg1)); // p1: its turn
+            send_all(g->p2, turn_msg2, strlen(turn_msg2)); // p2: other player's turn
+            printf("[TURN] %s's TURN\n", g->user1);
+        } else {
+            send_all(g->p1, turn_msg1, strlen(turn_msg1));
+            send_all(g->p2, turn_msg2, strlen(turn_msg2));
+            printf("[TURN] %s's TURN\n", g->user2);
+        }
+        fflush(stdout);
     }
+
 }
 
 
@@ -93,6 +108,14 @@ void gs_create_session(int s1, const char *u1, int e1,
     g->elo2 = e2;
     g->turn = 1;
     g->alive = 1;
+
+    // init boards and state
+    for (int i = 0; i < 100; ++i) {
+        g->board1[i] = 'U';
+        g->board2[i] = 'U';
+    }
+    g->ships1 = g->ships2 = 0;
+    g->ready1 = g->ready2 = 0;
 
     char msg1[128], msg2[128];
     /* Gửi cho s1: opponent=u2, opponent_elo=e2, your_turn flag = 1 (s1 đi trước) */
@@ -111,19 +134,6 @@ void gs_create_session(int s1, const char *u1, int e1,
     // Yêu cầu 2 client gửi board lên server
     send_all(s1, "SEND_BOARD\n", 11);
     send_all(s2, "SEND_BOARD\n", 11);
-
-    const char *your_turn = "YOUR_TURN\n";
-    const char *opp_turn  = "OPPONENT_TURN\n";
-    send_all(s1, your_turn, strlen(your_turn));
-    send_all(s2, opp_turn, strlen(opp_turn));
-    if (g->turn == 1) {
-        printf("[TURN] %s's TURN\n", g->user1);
-    } else {
-        printf("[TURN] %s's TURN\n", g->user2);
-    }
-    fflush(stdout);
-
-    
 }
 
 
