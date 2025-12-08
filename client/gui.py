@@ -691,9 +691,9 @@ def main_menu():
             for key, btn in buttons.items():
                 if btn.is_clicked(event):
                     if key == "pvp_open":
-                        launch_game(0)
+                        launch_game('open')
                     elif key == "pvp_rank":
-                        launch_game(1)
+                        launch_game('rank')
                     elif key == "logout":
                         # Logout animation
                         SCREEN.fill(BG_COLOR)
@@ -730,5 +730,4 @@ if __name__ == "__main__":
             break  
         
         
-        
-        
+               

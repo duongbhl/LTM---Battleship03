@@ -87,10 +87,12 @@ def draw_grid(board, x0, y0, title_text):
 
 def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
     net = NetworkClient(host, port)
+    my_elo = "?"
+    opponent_elo = "?"
 
     # GAME STATE
-    phase = "queue_wait_send"       # login → queue_wait_send → queue → playing → gameover
-    sent_find = False          # chỉ gửi FIND_MATCH 1 lần
+    phase = "queue_wait_send"   # login → queue_wait_send → queue → playing → gameover
+    sent_find = False           # chỉ gửi FIND_MATCH 1 lần
     message = "Connecting to server..."
     message_color = TEXT
     opponent = "???"
@@ -99,7 +101,9 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
     enemy_board = ["U"] * 100
     result = None
 
-    
+    # Queue timer
+    queue_started_at = None
+    queue_elapsed = 0
 
     clock = pygame.time.Clock()
     exit_button = Button((REAL_WIDTH - 180, 20, 160, 40), "Back to Menu")
@@ -110,42 +114,47 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
 
         # ----- RECEIVE MESSAGES -----
         msg = net.read_nowait()
-        
         while msg is not None:
             lines = msg.split("\n")
             for line in lines:
                 line = line.strip()
                 if not line:
                     continue
-                
+
                 print("[CLIENT PARSED LINE]", line)
                 parts = line.split("|")
                 cmd = parts[0]
 
                 if cmd == "LOGIN_OK":
+                    my_elo = parts[1] if len(parts) >= 2 else "?"
                     message = "Login OK. Searching for match..."
                     message_color = GOOD
-                    
-            
+                    phase = "queue_wait_send"
+
                 elif cmd == "LOGIN_FAIL":
                     phase = "error"
                     message = "Login failed"
                     continue
 
-
                 elif cmd == "QUEUED":
-                    if phase not in ("playing", "gameover"):
-                        message = "Waiting for opponent..."
-                        message_color = (180, 180, 255)
-                        phase = "queue"
+                    message = "Waiting for opponent..."
+                    message_color = (180, 180, 255)
+                    phase = "queue"
+                    if queue_started_at is None:
+                        queue_started_at = pygame.time.get_ticks()
 
                 elif cmd == "MATCH_FOUND":
-                    if len(parts) >= 3:
+                    if len(parts) >= 4:
                         opponent = parts[1]
-                        my_turn = parts[2] == "1"
+                        opponent_elo = parts[2]
+                        my_turn = parts[3] == "1"
                         phase = "playing"
                         message = f"Matched with {opponent}. " + ("Your turn!" if my_turn else "Opponent's turn...")
                         message_color = GOOD
+
+                        # stop/reset queue timer
+                        queue_started_at = None
+                        queue_elapsed = 0
 
                 elif cmd == "YOUR_TURN":
                     my_turn = True
@@ -185,7 +194,12 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
         if phase == "queue_wait_send" and not sent_find:
             net.send(f"FIND_MATCH|{username}|{mode}")
             sent_find = True
+            phase = "queue"
+            queue_started_at = pygame.time.get_ticks()
 
+        # ----- UPDATE QUEUE TIMER -----
+        if phase.startswith("queue") and queue_started_at is not None:
+            queue_elapsed = (pygame.time.get_ticks() - queue_started_at) // 1000
 
         # ----- EVENTS -----
         for ev in pygame.event.get():
@@ -213,37 +227,44 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
         SCREEN.fill(BG)
 
         title_surf = font_title.render("Battleship Online", True, TITLE)
-        SCREEN.blit(title_surf, title_surf.get_rect(center=(REAL_WIDTH//2, TOP_BANNER_HEIGHT//2)))
+        SCREEN.blit(title_surf, title_surf.get_rect(center=(REAL_WIDTH // 2, TOP_BANNER_HEIGHT // 2)))
 
-        info = f"You: {username}"
+        info = f"You: {username} ({my_elo})"
         if phase in ("playing", "gameover"):
-            info += f" | Opponent: {opponent}"
-        SCREEN.blit(font_small.render(info, True, TEXT), (SIDE_PADDING, TOP_BANNER_HEIGHT + 10))
+            info += f" | Opponent: {opponent} ({opponent_elo})"
+        SCREEN.blit(font_small.render(info, True, TEXT), (SIDE_PADDING, TOP_BANNER_HEIGHT - 25))
 
         if message:
             SCREEN.blit(font_text.render(message, True, message_color), (SIDE_PADDING, TOP_BANNER_HEIGHT + 40))
 
+        # Queue timer display
+        if phase.startswith("queue") and queue_started_at is not None:
+            col = (200, 200, 255)
+            if queue_elapsed >= 30:
+                col = (255, 180, 120)
+            elif queue_elapsed >= 20:
+                col = (255, 220, 140)
+            elif queue_elapsed >= 10:
+                col = (220, 220, 255)
+
+            t = f"Queue time: {queue_elapsed:02d}s"
+            SCREEN.blit(font_small.render(t, True, col),
+                        (SIDE_PADDING, TOP_BANNER_HEIGHT + 75))
+
         # Board
-        if phase.startswith("queue"):
-            center_msg = "Finding opponent..."
-            SCREEN.blit(font_title.render(center_msg, True, (200, 200, 255)),
-                (REAL_WIDTH//2 - 200, REAL_HEIGHT//2 - 40))
-
-        elif phase == "connecting":
-             SCREEN.blit(font_title.render("Connecting...", True, (200, 200, 255)),
-            (REAL_WIDTH//2 - 200, REAL_HEIGHT//2 - 40))
-
-        else:
-        # playing + gameover
+        if phase in ("playing", "gameover"):
             draw_grid(my_board, LEFT_GRID_X, GRID_Y, "Your board (opponent shots)")
-            draw_grid(enemy_board, RIGHT_GRID_X, GRID_Y,
-              "Enemy board (your shots)" + (" - YOUR TURN" if my_turn else ""))
-            
+            draw_grid(enemy_board, RIGHT_GRID_X, GRID_Y, "Enemy board (your shots)" + (" - YOUR TURN" if my_turn else ""))
+        else:
+            center_msg = "Finding opponent..." if phase.startswith("queue") else "Connecting to server..."
+            SCREEN.blit(font_title.render(center_msg, True, (200, 200, 255)),
+                        (REAL_WIDTH // 2 - 200, REAL_HEIGHT // 2 - 40))
+
         # Game over
         if phase == "gameover" and result:
             col = GOOD if result == "WIN" else BAD
             rs = font_title.render(f"Result: {result}", True, col)
-            SCREEN.blit(rs, rs.get_rect(center=(REAL_WIDTH//2, REAL_HEIGHT - BOTTOM_BANNER_HEIGHT//2)))
+            SCREEN.blit(rs, rs.get_rect(center=(REAL_WIDTH // 2, REAL_HEIGHT - BOTTOM_BANNER_HEIGHT // 2)))
 
         exit_button.update_hover(mouse_pos)
         exit_button.draw(SCREEN)

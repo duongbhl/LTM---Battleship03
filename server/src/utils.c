@@ -2,6 +2,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <stdio.h>
+#include <errno.h>
 
 size_t send_all(int sock, const char* data, size_t len)
 {
@@ -21,5 +23,16 @@ void trim_newline(char* s)
     while (len > 0 && (s[len-1] == '\n' || s[len-1] == '\r')) {
         s[len-1] = '\0';
         len--;
+    }
+}
+
+void send_logged(int sock, const char* msg) {
+    // In ra cả message (thấy rõ \n)
+    printf("[TX sock=%d] %s", sock, msg);
+    fflush(stdout);
+
+    if (send_all(sock, msg, strlen(msg)) < 0) {
+        printf("[TX sock=%d] send_all failed: %s\n", sock, strerror(errno));
+        fflush(stdout);
     }
 }

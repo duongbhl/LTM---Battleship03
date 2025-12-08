@@ -22,7 +22,7 @@ class NetworkClient:
                 if not data:
                     self.alive = False
                     break
-                print("RAW RECV:", repr(data.decode()))
+                # print("RAW RECV:", repr(data.decode()))
                 buffer += data.decode()
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)
@@ -34,12 +34,15 @@ class NetworkClient:
 
     def send(self, msg: str):
         if not self.alive:
+            print("[NET] send skipped: not alive")
             return
         data = (msg + "\n").encode()
+        print("[NET] SEND:", repr(msg))
         with self.sock_lock:
             try:
                 self.sock.sendall(data)
             except OSError:
+                print("[NET] send error:", e)
                 self.alive = False
 
     def read_nowait(self):

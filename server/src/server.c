@@ -26,6 +26,8 @@ static void *client_thread(void *arg)
     while (1)
     {
         int n = recv(sock, buf, sizeof(buf) - 1, 0);
+        printf("[RX sock=%d] %s", sock, buf);
+        fflush(stdout);
         if (n <= 0)
             break;
 
@@ -94,7 +96,6 @@ static void *client_thread(void *arg)
         }
     }
 
-    printf("[Server] Client disconnected: %d\n", sock);
     close(sock);
     return NULL;
 }
