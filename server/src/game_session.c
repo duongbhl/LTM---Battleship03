@@ -2,6 +2,7 @@
 #include "../include/utils.h"
 #include "../include/elo.h"
 #include "../include/database.h"
+#include <time.h> 
 
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +13,8 @@ typedef struct {
     int elo1, elo2;
     int turn;
     int alive;
+    time_t last_move_time;
+
 
     char board1[100];  // 'S' = ship, 'H' = hit, 'M' = miss, 'U' = unknown
     char board2[100];
@@ -20,6 +23,9 @@ typedef struct {
 
     int ready1;
     int ready2;
+
+    int dc_sock;        // socket của player bị disconnect
+    time_t dc_expire;   // thời điểm auto-forfeit
 } Game;
 
 static Game games[100];
@@ -28,6 +34,7 @@ static int game_count = 0;
 // Forward Declarations
 Game *find_game(int sock);
 void gs_set_board(int sock, const char *csv);
+int gs_get_other_player(int sock);
 
 Game *find_game(int sock)
 {
@@ -37,6 +44,15 @@ Game *find_game(int sock)
     }
     return NULL;
 }
+
+int gs_get_other_player(int sock) {
+    Game *g = find_game(sock);
+    if (!g) return -1;
+    if (sock == g->p1) return g->p2;
+    if (sock == g->p2) return g->p1;
+    return -1;
+}
+
 
 void gs_set_board(int sock, const char *csv)
 {
@@ -108,6 +124,8 @@ void gs_create_session(int s1, const char *u1, int e1,
     g->elo2 = e2;
     g->turn = 1;
     g->alive = 1;
+    g->last_move_time = time(NULL);
+
 
     // init boards and state
     for (int i = 0; i < 100; ++i) {
@@ -116,6 +134,9 @@ void gs_create_session(int s1, const char *u1, int e1,
     }
     g->ships1 = g->ships2 = 0;
     g->ready1 = g->ready2 = 0;
+    g->dc_sock = 0;
+    g->dc_expire = 0;
+
 
     char msg1[128], msg2[128];
     /* Gửi cho s1: opponent=u2, opponent_elo=e2, your_turn flag = 1 (s1 đi trước) */
@@ -143,13 +164,16 @@ void gs_handle_move(int sock, int x, int y)
 {
     Game *g = find_game(sock);
     if (!g) return;
+    g->last_move_time = time(NULL);
+
 
     int me = (sock == g->p1 ? 1 : 2);
     int enemy_sock = (me == 1 ? g->p2 : g->p1);
 
     // log moves
     const char *me_name = (me == 1 ? g->user1 : g->user2);
-    const char *enemy_name = (me == 1 ? g->user2 : g->user1);
+    const char *enemy_name = (me == 1 ? g->user2 : g->user1); // No usage yet
+    (void)enemy_name;
 
     printf("[MOVE] %s SHOOTS at (%d,%d)\n", me_name, x, y);
 
@@ -179,6 +203,14 @@ void gs_handle_move(int sock, int x, int y)
         send_all(enemy_sock, res2, strlen(res2));
 
         if (win) {
+            // p1 wins if me==1 else p2 wins
+            if (me == 1) {
+                send_all(g->p1, "GAMEOVER|WIN\n", 13);
+                send_all(g->p2, "GAMEOVER|LOSE\n", 14);
+            } else {
+                send_all(g->p2, "GAMEOVER|WIN\n", 13);
+                send_all(g->p1, "GAMEOVER|LOSE\n", 14);
+            }
             g->alive = 0;
             return;
         }
@@ -207,3 +239,57 @@ void gs_handle_move(int sock, int x, int y)
         send_all(g->p1, "YOUR_TURN\n", 10);
     }
 }
+
+void gs_handle_disconnect(int sock)
+{
+    Game *g = find_game(sock);
+    if (!g || !g->alive) return;
+
+    g->dc_sock = sock;
+    g->dc_expire = time(NULL) + 30;
+
+    int other = (sock == g->p1 ? g->p2 : g->p1);
+
+    printf("[GS] %s disconnected → opponent gets countdown\n",
+           (sock == g->p1 ? g->user1 : g->user2));
+
+    send_all(other, "OPPONENT_DISCONNECTED|30\n", 27);
+}
+
+
+
+void gs_forfeit(int sock)
+{
+    Game *g = find_game(sock);
+    if (!g || !g->alive) return;
+
+    int me = (sock == g->p1 ? 1 : 2);
+    int winner_sock = (me == 1 ? g->p2 : g->p1);
+    const char *winner = (me == 1 ? g->user2 : g->user1);
+    const char *loser  = (me == 1 ? g->user1 : g->user2);
+
+    printf("[FORFEIT] %s FORFEITS → %s WINS\n", loser, winner);
+
+    // gửi thông báo cho cả 2
+    send_all(winner_sock, "GAMEOVER|WIN\n", 13);
+    send_all(sock,         "GAMEOVER|LOSE\n", 14);
+
+    g->alive = 0;
+}
+
+void gs_tick_afk(void)
+{
+    time_t now = time(NULL);
+
+    for (int i = 0; i < game_count; i++) {
+        Game *g = &games[i];
+        if (!g->alive) continue;
+
+        if (g->dc_sock != 0 && now >= g->dc_expire) {
+            printf("[AFK] Disconnect timeout → auto-forfeit\n");
+            gs_forfeit(g->dc_sock);
+            g->dc_sock = 0;
+        }
+    }
+}
+
