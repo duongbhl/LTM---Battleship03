@@ -10,7 +10,7 @@ class NetworkClient:
         self.sock_lock = threading.Lock()
         self.recv_queue = queue.Queue()
         self.alive = True
-        self.on_disconnect = None
+        self.on_disconnect = None                         
 
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
@@ -37,12 +37,15 @@ class NetworkClient:
 
     def send(self, msg: str):
         if not self.alive:
+            print("[NET] send skipped: not alive")
             return
         data = (msg + "\n").encode()
+        print("[NET] SEND:", repr(msg))
         with self.sock_lock:
             try:
                 self.sock.sendall(data)
             except OSError:
+                print("[NET] send error:", e)
                 self.alive = False
 
     def read_nowait(self):

@@ -2,279 +2,318 @@
 #include "../include/utils.h"
 #include "../include/elo.h"
 #include "../include/database.h"
-#include <time.h> 
-
+				  
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <time.h>
 
-typedef struct {
+#define MAX_GAMES 100
+#define BOARD_N 10
+#define CELLS (BOARD_N * BOARD_N)
+
+/*
+  ships1/ships2: vị trí tàu (0/1) — bí mật
+  shots1/shots2: trạng thái bắn của đối thủ lên board mình (U/M/H) hoặc trạng thái bắn của mình lên enemy (tuỳ bạn muốn diễn giải)
+  Ở đây ta dùng:
+    - shots_by_p1: những ô P1 đã bắn lên board P2  (U/M/H)
+    - shots_by_p2: những ô P2 đã bắn lên board P1  (U/M/H)
+  remaining1/remaining2: số ô tàu còn lại của P1/P2
+*/
+
+struct Game
+{
     int p1, p2;
     char user1[32], user2[32];
     int elo1, elo2;
-    int turn;
+
+    int turn; // 1 = p1 turn, 2 = p2 turn
     int alive;
-    time_t last_move_time;
-
-
-    char board1[100];  // 'S' = ship, 'H' = hit, 'M' = miss, 'U' = unknown
-    char board2[100];
-    int ships1;
-    int ships2;
-
-    int ready1;
-    int ready2;
-
     int dc_sock;        // socket của player bị disconnect
     time_t dc_expire;   // thời điểm auto-forfeit
-} Game;
+	
+    unsigned char ships1[CELLS];
+    unsigned char ships2[CELLS];
 
-static Game games[100];
+    unsigned char shots_by_p1[CELLS]; // P1 shot result on P2
+    unsigned char shots_by_p2[CELLS]; // P2 shot result on P1
+
+    int remaining1; // ship cells alive of P1
+    int remaining2; // ship cells alive of P2
+};
+
+static Game games[MAX_GAMES];
 static int game_count = 0;
 
-// Forward Declarations
-Game *find_game(int sock);
-void gs_set_board(int sock, const char *csv);
-int gs_get_other_player(int sock);
+/* ===== Helpers ===== */
+
+static int idx_of(int x, int y) { return y * BOARD_N + x; }
+
+static void clear_board(unsigned char b[CELLS], unsigned char v)
+{
+    for (int i = 0; i < CELLS; i++)
+        b[i] = v;
+}
+
+/* đặt tàu ngẫu nhiên theo fleet cổ điển: 5,4,3,3,2 */
+static int place_ship(unsigned char ships[CELLS], int length)
+{
+    // thử nhiều lần để tránh kẹt
+    for (int tries = 0; tries < 500; tries++)
+    {
+        int horizontal = rand() % 2;
+        int x = rand() % BOARD_N;
+        int y = rand() % BOARD_N;
+
+        int dx = horizontal ? 1 : 0;
+        int dy = horizontal ? 0 : 1;
+
+        int endx = x + dx * (length - 1);
+        int endy = y + dy * (length - 1);
+        if (endx < 0 || endx >= BOARD_N || endy < 0 || endy >= BOARD_N)
+            continue;
+
+        // check overlap
+        int ok = 1;
+        for (int k = 0; k < length; k++)
+        {
+            int ix = x + dx * k;
+            int iy = y + dy * k;
+            if (ships[idx_of(ix, iy)] != 0)
+            {
+                ok = 0;
+                break;
+            }
+        }
+        if (!ok)
+            continue;
+
+        // place
+        for (int k = 0; k < length; k++)
+        {
+            int ix = x + dx * k;
+            int iy = y + dy * k;
+            ships[idx_of(ix, iy)] = 1;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static void randomize_fleet(unsigned char ships[CELLS], int *out_remaining)
+{
+    clear_board(ships, 0);
+    int fleet[] = {5, 4, 3, 3, 2};
+    int remaining = 0;
+    for (int i = 0; i < 5; i++)
+    {
+        int len = fleet[i];
+        if (!place_ship(ships, len))
+        {
+            // fallback cực hiếm: clear và làm lại
+            clear_board(ships, 0);
+            i = -1;
+            remaining = 0;
+            continue;
+        }
+        remaining += len;
+    }
+    *out_remaining = remaining;
+}
 
 Game *find_game(int sock)
 {
-    for (int i = 0; i < game_count; i++) {
+    for (int i = 0; i < game_count; i++)
+    {
         if (games[i].alive && (games[i].p1 == sock || games[i].p2 == sock))
             return &games[i];
     }
     return NULL;
 }
 
-int gs_get_other_player(int sock) {
-    Game *g = find_game(sock);
-    if (!g) return -1;
-    if (sock == g->p1) return g->p2;
-    if (sock == g->p2) return g->p1;
-    return -1;
-}
-
-
-void gs_set_board(int sock, const char *csv)
+// Player có đang thuộc game nào hay không
+int gs_player_in_game(int sock)
 {
     Game *g = find_game(sock);
-    if (!g) return;
-
-    char tmp[256];
-    strcpy(tmp, csv);
-
-    char *token = strtok(tmp, ",");
-    int idx = 0;
-
-    int count_ship = 0;
-
-    if (sock == g->p1) {
-        while (token && idx < 100) {
-            g->board1[idx] = token[0];
-            if (token[0] == 'S') count_ship++;
-            idx++;
-            token = strtok(NULL, ",");
-        }
-        g->ships1 = count_ship;
-        g->ready1 = 1;
-    }
-    else {
-        while (token && idx < 100) {
-            g->board2[idx] = token[0];
-            if (token[0] == 'S') count_ship++;
-            idx++;
-            token = strtok(NULL, ",");
-        }
-        g->ships2 = count_ship;
-        g->ready2 = 1;
-    }
-
-    // Khi cả 2 đã sẵn sàng → thông báo bắt đầu game
-    if (g->ready1 && g->ready2) {
-        // Gửi TURN cho từng client — gửi tên người chơi kèm "_TURN\n"
-        char turn_msg1[64], turn_msg2[64];
-        snprintf(turn_msg1, sizeof(turn_msg1), "%s_TURN\n", g->user1);
-        snprintf(turn_msg2, sizeof(turn_msg2), "%s_TURN\n", g->user2);
-
-        // Send appropriate turn messages based on g->turn (1 => player1 first)
-        if (g->turn == 1) {
-            send_all(g->p1, turn_msg1, strlen(turn_msg1)); // p1: its turn
-            send_all(g->p2, turn_msg2, strlen(turn_msg2)); // p2: other player's turn
-            printf("[TURN] %s's TURN\n", g->user1);
-        } else {
-            send_all(g->p1, turn_msg1, strlen(turn_msg1));
-            send_all(g->p2, turn_msg2, strlen(turn_msg2));
-            printf("[TURN] %s's TURN\n", g->user2);
-        }
-        fflush(stdout);
-    }
-
+    return (g != NULL);
 }
 
+// Game của player còn hoạt động hay không
+int gs_game_alive(int sock)
+{
+    Game *g = find_game(sock);
+    if (!g) return 0;
+    return g->alive;
+}
 
+/* ===== API ===== */
 
 void gs_create_session(int s1, const char *u1, int e1,
                        int s2, const char *u2, int e2)
 {
+    if (game_count >= MAX_GAMES)
+    {
+        send_logged(s1, "ERROR|Server full\n");
+        send_logged(s2, "ERROR|Server full\n");
+        return;
+    }
+
     Game *g = &games[game_count++];
     g->p1 = s1;
     g->p2 = s2;
-    strcpy(g->user1, u1);
-    strcpy(g->user2, u2);
+    strncpy(g->user1, u1, sizeof(g->user1) - 1);
+    strncpy(g->user2, u2, sizeof(g->user2) - 1);
+    g->user1[sizeof(g->user1) - 1] = 0;
+    g->user2[sizeof(g->user2) - 1] = 0;
+
     g->elo1 = e1;
     g->elo2 = e2;
     g->turn = 1;
     g->alive = 1;
-    g->last_move_time = time(NULL);
-
-
-    // init boards and state
-    for (int i = 0; i < 100; ++i) {
-        g->board1[i] = 'U';
-        g->board2[i] = 'U';
-    }
-    g->ships1 = g->ships2 = 0;
-    g->ready1 = g->ready2 = 0;
     g->dc_sock = 0;
     g->dc_expire = 0;
+	
+    // init boards
+    clear_board(g->shots_by_p1, 'U');
+    clear_board(g->shots_by_p2, 'U');
 
+    // auto place ships (để có HIT/MISS ngay)
+    randomize_fleet(g->ships1, &g->remaining1);
+    randomize_fleet(g->ships2, &g->remaining2);
 
     char msg1[128], msg2[128];
-    /* Gửi cho s1: opponent=u2, opponent_elo=e2, your_turn flag = 1 (s1 đi trước) */
-    snprintf(msg1, sizeof(msg1), "MATCH_FOUND|%s|%d|1\n", u2, e2);
-    /* Gửi cho s2: opponent=u1, opponent_elo=e1, your_turn flag = 0 */
-    snprintf(msg2, sizeof(msg2), "MATCH_FOUND|%s|%d|0\n", u1, e1);
+    snprintf(msg1, sizeof(msg1), "MATCH_FOUND|%s|%d|1\n", g->user2, g->elo2);
+    snprintf(msg2, sizeof(msg2), "MATCH_FOUND|%s|%d|0\n", g->user1, g->elo1);
 
-    printf("[GS] Creating session: %s(%d) <-> %s(%d)\n", u1, e1, u2, e2);
-    printf("[GS] Send to sock %d: %s", s1, msg1);
-    printf("[GS] Send to sock %d: %s", s2, msg2);
+    send_logged(g->p1, msg1);
+    send_logged(g->p2, msg2);
+
+    printf("[GS] Creating session: %s(%d) <-> %s(%d)\n", g->user1, g->elo1, g->user2, g->elo2);
     fflush(stdout);
 
-    send_all(s1, msg1, strlen(msg1));
-    send_all(s2, msg2, strlen(msg2));
-
-    // Yêu cầu 2 client gửi board lên server
-    send_all(s1, "SEND_BOARD\n", 11);
-    send_all(s2, "SEND_BOARD\n", 11);
+    send_logged(g->p1, "YOUR_TURN\n");
+    send_logged(g->p2, "OPPONENT_TURN\n");
 }
-
-
-
 
 void gs_handle_move(int sock, int x, int y)
 {
     Game *g = find_game(sock);
-    if (!g) return;
-    g->last_move_time = time(NULL);
-
-
-    int me = (sock == g->p1 ? 1 : 2);
-    int enemy_sock = (me == 1 ? g->p2 : g->p1);
-
-    // log moves
-    const char *me_name = (me == 1 ? g->user1 : g->user2);
-    const char *enemy_name = (me == 1 ? g->user2 : g->user1); // No usage yet
-    (void)enemy_name;
-
-    printf("[MOVE] %s SHOOTS at (%d,%d)\n", me_name, x, y);
-
-
-    char *enemy_board = (me == 1 ? g->board2 : g->board1);
-    int *enemy_ships = (me == 1 ? &g->ships2 : &g->ships1);
-
-    int idx = y * 10 + x;
-
-    char res[128], res2[128];
-
-    if (enemy_board[idx] == 'S') {
-        enemy_board[idx] = 'H';
-        (*enemy_ships)--;
-        printf("[RESULT] %s HITS\n", me_name);
-
-        int win = (*enemy_ships == 0);
-
-        snprintf(res, sizeof(res),
-                 "MOVE_RESULT|%d|%d|HIT|STATUS=%s\n",
-                 x, y, win ? "WIN" : "NONE");
-        send_all(sock, res, strlen(res));
-
-        snprintf(res2, sizeof(res2),
-                 "OPPONENT_MOVE|%d|%d|HIT|STATUS=%s\n",
-                 x, y, win ? "LOSE" : "NONE");
-        send_all(enemy_sock, res2, strlen(res2));
-
-        if (win) {
-            // p1 wins if me==1 else p2 wins
-            if (me == 1) {
-                send_all(g->p1, "GAMEOVER|WIN\n", 13);
-                send_all(g->p2, "GAMEOVER|LOSE\n", 14);
-            } else {
-                send_all(g->p2, "GAMEOVER|WIN\n", 13);
-                send_all(g->p1, "GAMEOVER|LOSE\n", 14);
-            }
-            g->alive = 0;
-            return;
-        }
-    } 
-    else {
-        if (enemy_board[idx] != 'H') enemy_board[idx] = 'M';
-        printf("[RESULT] %s MISSES\n", me_name);
-
-
-        snprintf(res, sizeof(res),
-                 "MOVE_RESULT|%d|%d|MISS|STATUS=NONE\n", x, y);
-        send_all(sock, res, strlen(res));
-
-        snprintf(res2, sizeof(res2),
-                 "OPPONENT_MOVE|%d|%d|MISS|STATUS=NONE\n", x, y);
-        send_all(enemy_sock, res2, strlen(res2));
+    if (!g) {
+        send_logged(sock, "ERROR|Not in game\n");
+        return;
     }
 
-    if (me == 1) {
-        printf("[TURN] %s's TURN\n", g->user2);
-        send_all(g->p1, "OPPONENT_TURN\n", 14);
-        send_all(g->p2, "YOUR_TURN\n", 10);
+    // validate coords
+    if (x < 0 || x >= BOARD_N || y < 0 || y >= BOARD_N) {
+        send_logged(sock, "ERROR|Invalid coordinate\n");
+        return;
+    }
+
+    int is_p1 = (sock == g->p1);
+    int me_turn = is_p1 ? 1 : 2;
+    int enemy_sock = is_p1 ? g->p2 : g->p1;
+
+    // enforce turn
+    if (g->turn != me_turn) {
+        send_logged(sock, "ERROR|Not your turn\n");
+        return;
+    }
+
+    unsigned char *my_shots   = is_p1 ? g->shots_by_p1 : g->shots_by_p2;
+    unsigned char *enemy_ships = is_p1 ? g->ships2     : g->ships1;
+    int *enemy_remaining       = is_p1 ? &g->remaining2 : &g->remaining1;
+
+    int idx = idx_of(x, y);
+
+    // already targeted?
+    if (my_shots[idx] != 'U') {
+        send_logged(sock, "ERROR|Cell already targeted\n");
+        return;
+    }
+
+    // Determine hit or miss
+    int is_hit = (enemy_ships[idx] == 1);
+    const char *result;
+
+    if (is_hit) {
+        enemy_ships[idx] = 2;  // mark as hit
+        my_shots[idx] = 'H';
+        (*enemy_remaining)--;
+        result = "HIT";
     } else {
-        printf("[TURN] %s's TURN\n", g->user1);
-        send_all(g->p2, "OPPONENT_TURN\n", 14);
-        send_all(g->p1, "YOUR_TURN\n", 10);
+        my_shots[idx] = 'M';
+        result = "MISS";
+    }
+
+    // status
+    const char *status_me = "NONE";
+    const char *status_enemy = "NONE";
+
+    // Check win condition
+    if (*enemy_remaining <= 0) {
+        status_me = "WIN";
+        status_enemy = "LOSE";
+        g->alive = 0;
+    }
+
+    // LOG
+    printf("[GS RX] sock=%d MOVE %d %d => %s (enemy_remaining=%d)\n",
+           sock, x, y, result, *enemy_remaining);
+    fflush(stdout);
+
+    // Send local result
+    char msg[128];
+    snprintf(msg, sizeof(msg),
+             "MOVE_RESULT|%d|%d|%s|STATUS=%s\n",
+             x, y, result, status_me);
+    send_logged(sock, msg);
+
+    // Notify enemy
+    snprintf(msg, sizeof(msg),
+             "OPPONENT_MOVE|%d|%d|%s|STATUS=%s\n",
+             x, y, result, status_enemy);
+    send_logged(enemy_sock, msg);
+
+    // Game over → stop turn logic
+    if (!g->alive){
+        g->dc_sock = 0;      // prevent AFK countdown after game ended
+        g->dc_expire = 0;
+        return;
+    }
+    // ========= TURN LOGIC =========
+    // If MISS → switch turn
+    // If HIT  → shooter continues
+    if (!is_hit) {
+        g->turn = (g->turn == 1) ? 2 : 1;
+
+        // notify
+        send_logged(sock, "OPPONENT_TURN\n");
+        send_logged(enemy_sock, "YOUR_TURN\n");
+    } else {
+        // shooter keeps shooting
+        send_logged(sock, "YOUR_TURN\n");
+        send_logged(enemy_sock, "OPPONENT_TURN\n");
     }
 }
 
 void gs_handle_disconnect(int sock)
 {
     Game *g = find_game(sock);
-    if (!g || !g->alive) return;
+    if (!g || g->alive == 0) {
+        return;
+    }
 
     g->dc_sock = sock;
-    g->dc_expire = time(NULL) + 30;
+    g->dc_expire = time(NULL) + 30;  // 30s auto-forfeit
 
     int other = (sock == g->p1 ? g->p2 : g->p1);
 
     printf("[GS] %s disconnected → opponent gets countdown\n",
            (sock == g->p1 ? g->user1 : g->user2));
 
-    send_all(other, "OPPONENT_DISCONNECTED|30\n", 27);
-}
-
-
-
-void gs_forfeit(int sock)
-{
-    Game *g = find_game(sock);
-    if (!g || !g->alive) return;
-
-    int me = (sock == g->p1 ? 1 : 2);
-    int winner_sock = (me == 1 ? g->p2 : g->p1);
-    const char *winner = (me == 1 ? g->user2 : g->user1);
-    const char *loser  = (me == 1 ? g->user1 : g->user2);
-
-    printf("[FORFEIT] %s FORFEITS → %s WINS\n", loser, winner);
-
-    // gửi thông báo cho cả 2
-    send_all(winner_sock, "GAMEOVER|WIN\n", 13);
-    send_all(sock,         "GAMEOVER|LOSE\n", 14);
-
-    g->alive = 0;
+    char msg[64];
+    snprintf(msg, sizeof(msg), "OPPONENT_DISCONNECTED|30\n");
+    send_logged(other, msg);
 }
 
 void gs_tick_afk(void)
@@ -285,6 +324,7 @@ void gs_tick_afk(void)
         Game *g = &games[i];
         if (!g->alive) continue;
 
+        // Nếu có người disconnect và hết hạn countdown
         if (g->dc_sock != 0 && now >= g->dc_expire) {
             printf("[AFK] Disconnect timeout → auto-forfeit\n");
             gs_forfeit(g->dc_sock);
@@ -293,3 +333,23 @@ void gs_tick_afk(void)
     }
 }
 
+
+void gs_forfeit(int sock)
+{
+    Game *g = find_game(sock);
+    if (!g || !g->alive) return;
+
+    int is_p1 = (sock == g->p1);
+    int winner_sock = is_p1 ? g->p2 : g->p1;
+    const char *winner = is_p1 ? g->user2 : g->user1;
+    const char *loser  = is_p1 ? g->user1 : g->user2;
+
+    printf("[FORFEIT] %s FORFEITS → %s WINS\n", loser, winner);
+
+    send_logged(winner_sock, "GAMEOVER|WIN\n");
+    send_logged(sock,         "GAMEOVER|LOSE\n");
+
+    g->alive = 0;
+    g->dc_sock = 0;
+    g->dc_expire = 0;
+}

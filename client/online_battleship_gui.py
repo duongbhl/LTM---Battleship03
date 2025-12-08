@@ -90,10 +90,9 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
     my_elo = "?"
     opponent_elo = "?"
 
-
     # GAME STATE
-    phase = "queue_wait_send"       # login → queue_wait_send → queue → playing → gameover
-    sent_find = False          # chỉ gửi FIND_MATCH 1 lần
+    phase = "queue_wait_send"   # login → queue_wait_send → queue → playing → gameover
+    sent_find = False           # chỉ gửi FIND_MATCH 1 lần
     message = "Connecting to server..."
     message_color = TEXT
     opponent = "???"
@@ -103,15 +102,16 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
     result = None
     opponent_dc = False
     dc_countdown = 0
-    dc_start_time = 0
+    dc_start_time = 0                   
 
-    
+    # Queue timer
+    queue_started_at = None
+    queue_elapsed = 0
 
     clock = pygame.time.Clock()
-
     EXIT_BUTTON_COLOR = (200, 70, 70)
     EXIT_BUTTON_HOVER_COLOR = (230, 100, 100)
-
+    
     exit_button = Button(
         (REAL_WIDTH - 180, 20, 160, 40),
         "Surrender",
@@ -119,21 +119,19 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
         hover=EXIT_BUTTON_HOVER_COLOR
     )
 
-
     running = True
     while running:
         mouse_pos = pygame.mouse.get_pos()
 
         # ----- RECEIVE MESSAGES -----
         msg = net.read_nowait()
-        
         while msg is not None:
             lines = msg.split("\n")
             for line in lines:
                 line = line.strip()
                 if not line:
                     continue
-                
+
                 print("[CLIENT PARSED LINE]", line)
                 parts = line.split("|")
                 cmd = parts[0]
@@ -142,18 +140,19 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
                     my_elo = parts[1] if len(parts) >= 2 else "?"
                     message = "Login OK. Searching for match..."
                     message_color = GOOD
-                    phase = "queue_wait_send"   # CHUYỂN QUA TRẠNG THÁI CHỜ GỬI 
-            
+                    phase = "queue_wait_send"
+
                 elif cmd == "LOGIN_FAIL":
                     phase = "error"
                     message = "Login failed"
                     continue
 
-
                 elif cmd == "QUEUED":
                     message = "Waiting for opponent..."
                     message_color = (180, 180, 255)
                     phase = "queue"
+                    if queue_started_at is None:
+                        queue_started_at = pygame.time.get_ticks()
 
                 elif cmd == "MATCH_FOUND":
                     if len(parts) >= 4:
@@ -163,24 +162,21 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
                         phase = "playing"
                         message = f"Matched with {opponent}. " + ("Your turn!" if my_turn else "Opponent's turn...")
                         message_color = GOOD
-                        
+
+                        # stop/reset queue timer
+                        queue_started_at = None
+                        queue_elapsed = 0
 
                 elif cmd == "YOUR_TURN":
                     my_turn = True
                     message = "Your turn!"
                     message_color = GOOD
-
-                elif cmd == "SEND_BOARD":
-                    csv = ",".join(my_board)
-                    net.send(f"BOARD|{csv}")
-
                 elif cmd == "OPPONENT_DISCONNECTED":
                     opponent_dc = True
                     dc_countdown = int(parts[1]) if len(parts) >= 2 else 10
                     dc_start_time = pygame.time.get_ticks()
                     message = f"Opponent disconnected. Auto-forfeit in {dc_countdown}s"
-                    message_color = BAD
-
+                    message_color = BAD                                                                                                                        
                 elif cmd == "OPPONENT_TURN":
                     my_turn = False
                     message = "Opponent's turn..."
@@ -203,11 +199,12 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
                         y = int(parts[2])
                         idx = y * 10 + x
                         my_board[idx] = "H" if parts[3] == "HIT" else "M"
-                        opponent_dc = False
+                        opponent_dc = False                   
                         status = parts[4].split("=")[-1]
                         if status == "LOSE":
                             phase = "gameover"
                             result = "LOSE"
+                            
                 elif cmd == "GAMEOVER":
                     if len(parts) >= 2:
                         phase = "gameover"
@@ -217,8 +214,7 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
                             message_color = GOOD
                         else:
                             message = "You lose!"
-                            message_color = BAD
-
+                            message_color = BAD                                       
             msg = net.read_nowait()
 
         # ----- SEND FIND_MATCH (CHUẨN 100%) -----
@@ -226,6 +222,11 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
             net.send(f"FIND_MATCH|{username}|{mode}")
             sent_find = True
             phase = "queue"
+            queue_started_at = pygame.time.get_ticks()
+
+        # ----- UPDATE QUEUE TIMER -----
+        if phase.startswith("queue") and queue_started_at is not None:
+            queue_elapsed = (pygame.time.get_ticks() - queue_started_at) // 1000
 
         # ----- EVENTS -----
         for ev in pygame.event.get():
@@ -237,16 +238,22 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
                 exit_button.update_hover(mouse_pos)
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                 if exit_button.clicked(ev):
-                    # If in game → surrender
-                    if phase == "playing":
+                    # --- Not in game yet → Back to menu ---
+                    if phase in ("queue_wait_send", "queue"):
+                        running = False
+
+                    # --- In match → Surrender ---
+                    elif phase == "playing":
                         net.send(f"SURRENDER|{username}")
                         phase = "gameover"
                         result = "LOSE"
                         message = "You surrendered!"
                         message_color = BAD
-                    # If game over → back to menu
+
+                    # --- After match → Back to menu ---
                     elif phase == "gameover":
                         running = False
+
 
                 # TRONG TRẬN BẮN
                 if phase == "playing" and my_turn:
@@ -257,7 +264,6 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
                         idx = r * 10 + c
                         if enemy_board[idx] == "U":
                             net.send(f"MOVE|{c}|{r}")
-
         # ----- DISCONNECT COUNTDOWN -----
         if opponent_dc:
             elapsed = (pygame.time.get_ticks() - dc_start_time) / 1000
@@ -273,21 +279,33 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
             else:
                 message = f"Opponent disconnected. Auto-forfeit in {remaining}s"
                 message_color = BAD
-
         # ----- RENDER -----
         SCREEN.fill(BG)
 
         title_surf = font_title.render("Battleship Online", True, TITLE)
-        SCREEN.blit(title_surf, title_surf.get_rect(center=(REAL_WIDTH//2, TOP_BANNER_HEIGHT//2)))
+        SCREEN.blit(title_surf, title_surf.get_rect(center=(REAL_WIDTH // 2, TOP_BANNER_HEIGHT // 2)))
 
         info = f"You: {username} ({my_elo})"
         if phase in ("playing", "gameover"):
             info += f" | Opponent: {opponent} ({opponent_elo})"
         SCREEN.blit(font_small.render(info, True, TEXT), (SIDE_PADDING, TOP_BANNER_HEIGHT - 25))
 
-
         if message:
             SCREEN.blit(font_text.render(message, True, message_color), (SIDE_PADDING, TOP_BANNER_HEIGHT + 40))
+
+        # Queue timer display
+        if phase.startswith("queue") and queue_started_at is not None:
+            col = (200, 200, 255)
+            if queue_elapsed >= 30:
+                col = (255, 180, 120)
+            elif queue_elapsed >= 20:
+                col = (255, 220, 140)
+            elif queue_elapsed >= 10:
+                col = (220, 220, 255)
+
+            t = f"Queue time: {queue_elapsed:02d}s"
+            SCREEN.blit(font_small.render(t, True, col),
+                        (SIDE_PADDING, TOP_BANNER_HEIGHT + 75))
 
         # Board
         if phase in ("playing", "gameover"):
@@ -296,25 +314,34 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
         else:
             center_msg = "Finding opponent..." if phase.startswith("queue") else "Connecting to server..."
             SCREEN.blit(font_title.render(center_msg, True, (200, 200, 255)),
-                        (REAL_WIDTH//2 - 200, REAL_HEIGHT//2 - 40))
+                        (REAL_WIDTH // 2 - 200, REAL_HEIGHT // 2 - 40))
 
         # Game over
         if phase == "gameover" and result:
             col = GOOD if result == "WIN" else BAD
             rs = font_title.render(f"Result: {result}", True, col)
-            SCREEN.blit(rs, rs.get_rect(center=(REAL_WIDTH//2, REAL_HEIGHT - BOTTOM_BANNER_HEIGHT//2)))
+            SCREEN.blit(rs, rs.get_rect(center=(REAL_WIDTH // 2, REAL_HEIGHT - BOTTOM_BANNER_HEIGHT // 2)))
 
         exit_button.update_hover(mouse_pos)
-        # Change button text when game is over
-        if phase == "gameover": 
+         # Change button text when game is over
+        if phase in ("queue_wait_send", "queue"):
+            # Not in game yet → Back to Menu
             exit_button.text = "Back to Menu"
-            exit_button.color = (90, 110, 160)      # add color
+            exit_button.color = (90, 110, 160)
             exit_button.hover = (120, 140, 190)
-        else:
+
+        elif phase == "playing":
+            # In game → Surrender
             exit_button.text = "Surrender"
-            exit_button.color = (200, 70, 70)       
+            exit_button.color = (200, 70, 70)
             exit_button.hover = (230, 100, 100)
-        
+
+        elif phase == "gameover":
+            # After game → Back to Menu
+            exit_button.text = "Back to Menu"
+            exit_button.color = (90, 110, 160)
+            exit_button.hover = (120, 140, 190)                                            
+
         exit_button.draw(SCREEN)
 
         # Draw disconnected countdown near surrender button
@@ -327,8 +354,7 @@ def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
             SCREEN.blit(
                 t_surf,
                 (exit_button.rect.x - t_surf.get_width() - 20, exit_button.rect.y + 8)
-            )
-
+            )                                                           
         pygame.display.flip()
         clock.tick(60)
 

@@ -98,8 +98,8 @@ def send_auth_request(command, username, password):
         sock.settimeout(5)
         sock.connect(("127.0.0.1", 5050))
         
-        request = f"{command}|{username}|{password}"
-        sock.send(request.encode())
+        request = f"{command}|{username}|{password}\n"
+        sock.sendall(request.encode())
         
         response = sock.recv(1024).decode()
         sock.close() 
@@ -691,9 +691,9 @@ def main_menu():
             for key, btn in buttons.items():
                 if btn.is_clicked(event):
                     if key == "pvp_open":
-                        launch_game(0)
+                        launch_game('open')
                     elif key == "pvp_rank":
-                        launch_game(1)
+                        launch_game('rank')
                     elif key == "logout":
                         # Logout animation
                         SCREEN.fill(BG_COLOR)
@@ -730,5 +730,4 @@ if __name__ == "__main__":
             break  
         
         
-        
-        
+               
