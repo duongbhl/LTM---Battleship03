@@ -34,12 +34,15 @@ class NetworkClient:
 
     def send(self, msg: str):
         if not self.alive:
+            print("[NET] send skipped: not alive")
             return
         data = (msg + "\n").encode()
+        print("[NET] SEND:", repr(msg))
         with self.sock_lock:
             try:
                 self.sock.sendall(data)
             except OSError:
+                print("[NET] send error:", e)
                 self.alive = False
 
     def read_nowait(self):

@@ -10,16 +10,19 @@ void handle_login(int sock, const char *user, const char *pass)
     int elo = 0;
     char err[128];
 
-    if (db_login_user(user, pass, &elo, err, sizeof(err)) == 0) {
+    if (db_login_user(user, pass, &elo, err, sizeof(err)) == 0)
+    {
         // LOGIN_OK|message
         char msg[128];
         snprintf(msg, sizeof(msg), "LOGIN_OK|%d\n", elo);
-        send_all(sock, msg, strlen(msg));
-    } else {
+        send_logged(sock, msg);
+    }
+    else
+    {
         // LOGIN_FAIL|reason
-        char msg[256];
+        char msg[128];
         snprintf(msg, sizeof(msg), "LOGIN_FAIL|%s\n", err);
-        send_all(sock, msg, strlen(msg));
+        send_logged(sock, msg);
     }
 }
 
@@ -27,14 +30,16 @@ void handle_register(int sock, const char *user, const char *pass)
 {
     char err[128];
 
-    if (db_register_user(user, pass, err, sizeof(err)) == 0) {
+    if (db_register_user(user, pass, err, sizeof(err)) == 0)
+    {
         // REGISTER_SUCCESS|message  ✅ để client lấy message hiển thị
-        const char *msg = "REGISTER_SUCCESS|";
-        send_all(sock, msg, strlen(msg));
-    } else {
+        send_logged(sock, "REGISTER_SUCCESS\n");
+    }
+    else
+    {
         // REGISTER_FAIL|reason
         char msg[256];
-        snprintf(msg, sizeof(msg), "REGISTER_FAIL|", err);
-        send_all(sock, msg, strlen(msg));
+        snprintf(msg, sizeof(msg), "REGISTER_FAIL|%s\n", err);
+        send_logged(sock, msg);
     }
 }

@@ -1,5 +1,6 @@
 #include "../include/database.h"
 #include "../include/server.h"
+#include "../include/matchmaking.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -13,6 +14,8 @@ int main(void)
         return 1;
     }
     server_init(5050);
+
+    mm_start_worker();
     server_run();
 
     db_close();
