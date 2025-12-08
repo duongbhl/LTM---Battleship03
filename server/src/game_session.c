@@ -47,14 +47,18 @@ static int game_count = 0;
 
 static int idx_of(int x, int y) { return y * BOARD_N + x; }
 
-static void clear_board(unsigned char b[CELLS], unsigned char v) {
-    for (int i = 0; i < CELLS; i++) b[i] = v;
+static void clear_board(unsigned char b[CELLS], unsigned char v)
+{
+    for (int i = 0; i < CELLS; i++)
+        b[i] = v;
 }
 
 /* đặt tàu ngẫu nhiên theo fleet cổ điển: 5,4,3,3,2 */
-static int place_ship(unsigned char ships[CELLS], int length) {
+static int place_ship(unsigned char ships[CELLS], int length)
+{
     // thử nhiều lần để tránh kẹt
-    for (int tries = 0; tries < 500; tries++) {
+    for (int tries = 0; tries < 500; tries++)
+    {
         int horizontal = rand() % 2;
         int x = rand() % BOARD_N;
         int y = rand() % BOARD_N;
@@ -64,19 +68,27 @@ static int place_ship(unsigned char ships[CELLS], int length) {
 
         int endx = x + dx * (length - 1);
         int endy = y + dy * (length - 1);
-        if (endx < 0 || endx >= BOARD_N || endy < 0 || endy >= BOARD_N) continue;
+        if (endx < 0 || endx >= BOARD_N || endy < 0 || endy >= BOARD_N)
+            continue;
 
         // check overlap
         int ok = 1;
-        for (int k = 0; k < length; k++) {
+        for (int k = 0; k < length; k++)
+        {
             int ix = x + dx * k;
             int iy = y + dy * k;
-            if (ships[idx_of(ix, iy)] != 0) { ok = 0; break; }
+            if (ships[idx_of(ix, iy)] != 0)
+            {
+                ok = 0;
+                break;
+            }
         }
-        if (!ok) continue;
+        if (!ok)
+            continue;
 
         // place
-        for (int k = 0; k < length; k++) {
+        for (int k = 0; k < length; k++)
+        {
             int ix = x + dx * k;
             int iy = y + dy * k;
             ships[idx_of(ix, iy)] = 1;
@@ -86,13 +98,16 @@ static int place_ship(unsigned char ships[CELLS], int length) {
     return 0;
 }
 
-static void randomize_fleet(unsigned char ships[CELLS], int *out_remaining) {
+static void randomize_fleet(unsigned char ships[CELLS], int *out_remaining)
+{
     clear_board(ships, 0);
-    int fleet[] = {5,4,3,3,2};
+    int fleet[] = {5, 4, 3, 3, 2};
     int remaining = 0;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 5; i++)
+    {
         int len = fleet[i];
-        if (!place_ship(ships, len)) {
+        if (!place_ship(ships, len))
+        {
             // fallback cực hiếm: clear và làm lại
             clear_board(ships, 0);
             i = -1;
@@ -119,7 +134,8 @@ static Game *find_game(int sock)
 void gs_create_session(int s1, const char *u1, int e1,
                        int s2, const char *u2, int e2)
 {
-    if (game_count >= MAX_GAMES) {
+    if (game_count >= MAX_GAMES)
+    {
         send_logged(s1, "ERROR|Server full\n");
         send_logged(s2, "ERROR|Server full\n");
         return;
@@ -128,10 +144,10 @@ void gs_create_session(int s1, const char *u1, int e1,
     Game *g = &games[game_count++];
     g->p1 = s1;
     g->p2 = s2;
-    strncpy(g->user1, u1, sizeof(g->user1)-1);
-    strncpy(g->user2, u2, sizeof(g->user2)-1);
-    g->user1[sizeof(g->user1)-1] = 0;
-    g->user2[sizeof(g->user2)-1] = 0;
+    strncpy(g->user1, u1, sizeof(g->user1) - 1);
+    strncpy(g->user2, u2, sizeof(g->user2) - 1);
+    g->user1[sizeof(g->user1) - 1] = 0;
+    g->user2[sizeof(g->user2) - 1] = 0;
 
     g->elo1 = e1;
     g->elo2 = e2;
@@ -184,21 +200,24 @@ void gs_handle_move(int sock, int x, int y)
         return;
     }
 
-    unsigned char *my_shots = is_p1 ? g->shots_by_p1 : g->shots_by_p2;
-    unsigned char *enemy_ships = is_p1 ? g->ships2 : g->ships1;
-    int *enemy_remaining = is_p1 ? &g->remaining2 : &g->remaining1;
+    unsigned char *my_shots   = is_p1 ? g->shots_by_p1 : g->shots_by_p2;
+    unsigned char *enemy_ships = is_p1 ? g->ships2     : g->ships1;
+    int *enemy_remaining       = is_p1 ? &g->remaining2 : &g->remaining1;
 
     int idx = idx_of(x, y);
 
-    // already shot?
+    // already targeted?
     if (my_shots[idx] != 'U') {
         send_logged(sock, "ERROR|Cell already targeted\n");
         return;
     }
 
-    const char *result = "MISS";
-    if (enemy_ships[idx] == 1) {
-        enemy_ships[idx] = 2; // marked as hit
+    // Determine hit or miss
+    int is_hit = (enemy_ships[idx] == 1);
+    const char *result;
+
+    if (is_hit) {
+        enemy_ships[idx] = 2;  // mark as hit
         my_shots[idx] = 'H';
         (*enemy_remaining)--;
         result = "HIT";
@@ -211,40 +230,47 @@ void gs_handle_move(int sock, int x, int y)
     const char *status_me = "NONE";
     const char *status_enemy = "NONE";
 
+    // Check win condition
     if (*enemy_remaining <= 0) {
-        // me wins
         status_me = "WIN";
         status_enemy = "LOSE";
         g->alive = 0;
-
-        // (Optional) update elo here if you implement db_update_elo:
-        // int newA, newB;
-        // if (is_p1) elo_update_pair(g->elo1, g->elo2, 1, 32, &newA, &newB);
-        // else       elo_update_pair(g->elo2, g->elo1, 1, 32, &newA, &newB);
-        // db_set_elo(g->user1, new_elo1); db_set_elo(g->user2, new_elo2);
     }
 
-    // log RX
+    // LOG
     printf("[GS RX] sock=%d MOVE %d %d => %s (enemy_remaining=%d)\n",
            sock, x, y, result, *enemy_remaining);
     fflush(stdout);
 
-    // send result to shooter
+    // Send local result
     char msg[128];
-    snprintf(msg, sizeof(msg), "MOVE_RESULT|%d|%d|%s|STATUS=%s\n", x, y, result, status_me);
+    snprintf(msg, sizeof(msg),
+             "MOVE_RESULT|%d|%d|%s|STATUS=%s\n",
+             x, y, result, status_me);
     send_logged(sock, msg);
 
-    // notify enemy
-    snprintf(msg, sizeof(msg), "OPPONENT_MOVE|%d|%d|%s|STATUS=%s\n", x, y, result, status_enemy);
+    // Notify enemy
+    snprintf(msg, sizeof(msg),
+             "OPPONENT_MOVE|%d|%d|%s|STATUS=%s\n",
+             x, y, result, status_enemy);
     send_logged(enemy_sock, msg);
 
-    // if game over, no more turn switching
-    if (g->alive == 0) return;
+    // Game over → stop turn logic
+    if (!g->alive)
+        return;
 
-    // switch turn
-    g->turn = (g->turn == 1) ? 2 : 1;
+    // ========= TURN LOGIC =========
+    // If MISS → switch turn
+    // If HIT  → shooter continues
+    if (!is_hit) {
+        g->turn = (g->turn == 1) ? 2 : 1;
 
-    // send turn signals
-    send_logged(sock, "OPPONENT_TURN\n");
-    send_logged(enemy_sock, "YOUR_TURN\n");
+        // notify
+        send_logged(sock, "OPPONENT_TURN\n");
+        send_logged(enemy_sock, "YOUR_TURN\n");
+    } else {
+        // shooter keeps shooting
+        send_logged(sock, "YOUR_TURN\n");
+        send_logged(enemy_sock, "OPPONENT_TURN\n");
+    }
 }
