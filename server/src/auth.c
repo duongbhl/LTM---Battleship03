@@ -1,24 +1,45 @@
 #include "../include/auth.h"
 #include "../include/database.h"
+#include "../include/utils.h"
+
 #include <stdio.h>
 #include <string.h>
 
-void handle_register(int sock, const char *data) {
-    char user[64], pass[64];
-    sscanf(data, "%63[^|]|%63s", user, pass);
+void handle_login(int sock, const char *user, const char *pass)
+{
+    int elo = 0;
+    char err[128];
 
-    if (db_register(user, pass))
-        send_response(sock, "ok", "Register successful");
+    if (db_login_user(user, pass, &elo, err, sizeof(err)) == 0)
+    {
+        // LOGIN_OK|message
+        char msg[128];
+        snprintf(msg, sizeof(msg), "LOGIN_OK|%d\n", elo);
+        send_logged(sock, msg);
+    }
     else
-        send_response(sock, "error", "Username already exists");
+    {
+        // LOGIN_FAIL|reason
+        char msg[128];
+        snprintf(msg, sizeof(msg), "LOGIN_FAIL|%s\n", err);
+        send_logged(sock, msg);
+    }
 }
 
-void handle_login(int sock, const char *data) {
-    char user[64], pass[64];
-    sscanf(data, "%63[^|]|%63s", user, pass);
+void handle_register(int sock, const char *user, const char *pass)
+{
+    char err[128];
 
-    if (db_login(user, pass))
-        send_response(sock, "ok", "Login successful");
+    if (db_register_user(user, pass, err, sizeof(err)) == 0)
+    {
+        // REGISTER_SUCCESS|message  ✅ để client lấy message hiển thị
+        send_logged(sock, "REGISTER_SUCCESS\n");
+    }
     else
-        send_response(sock, "error", "Invalid username or password");
+    {
+        // REGISTER_FAIL|reason
+        char msg[256];
+        snprintf(msg, sizeof(msg), "REGISTER_FAIL|%s\n", err);
+        send_logged(sock, msg);
+    }
 }

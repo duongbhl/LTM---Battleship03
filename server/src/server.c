@@ -1,87 +1,134 @@
-#include "server.h"
-#include "database.h"
+#include "../include/server.h"
+#include "../include/auth.h"
+#include "../include/matchmaking.h"
+#include "../include/game_session.h"
+#include "../include/database.h"
+#include "../include/utils.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 
 int listen_sock;
 
-void server_init(int port) {
+static void *client_thread(void *arg)
+{
+    int sock = *(int *)arg;
+    free(arg);
+
+    printf("[Server] Client connected: %d\n", sock);
+
+    char buf[256];
+
+    while (1)
+    {
+        int n = recv(sock, buf, sizeof(buf) - 1, 0);
+        printf("[RX sock=%d] %s", sock, buf);
+        fflush(stdout);
+        if (n <= 0)
+            break;
+
+        buf[n] = '\0';
+        trim_newline(buf);
+
+        // --- PARSE CHUẨN ---
+        char cmd[32] = {0}, a[64] = {0}, b[64] = {0};
+
+        char *p1 = strtok(buf, "|");
+        char *p2 = strtok(NULL, "|");
+        char *p3 = strtok(NULL, "|");
+
+        if (p1)
+            strcpy(cmd, p1);
+        if (p2)
+            strcpy(a, p2);
+        if (p3)
+            strcpy(b, p3);
+
+        int parts = 0;
+        if (p1)
+            parts = 1;
+        if (p2)
+            parts = 2;
+        if (p3)
+            parts = 3;
+
+        // --------------------
+
+        if (strcmp(cmd, "LOGIN") == 0 && parts == 3)
+        {
+            handle_login(sock, a, b);
+            continue;
+        }
+        else if (strcmp(cmd, "REGISTER") == 0 && parts == 3)
+        {
+            handle_register(sock, a, b);
+            continue;
+        }
+        else if (strcmp(cmd, "FIND_MATCH") == 0 && parts >= 3)
+        {
+            char *username = a;
+            char *mode = b; // "rank" hoặc "open"
+
+            int elo = db_get_elo(username);
+
+            if (strcmp(mode, "rank") == 0)
+                mm_request_match(sock, username, elo, 1);
+            else
+                mm_request_match(sock, username, elo, 0);
+
+            continue;
+        }
+
+        else if (strcmp(cmd, "MOVE") == 0 && parts == 3)
+        {
+            int x = atoi(a);
+            int y = atoi(b);
+            gs_handle_move(sock, x, y);
+            continue;
+        }
+        else
+        {
+            send_all(sock, "ERROR|Unknown command\n", 23);
+        }
+    }
+
+    close(sock);
+    return NULL;
+}
+
+void server_init(int port)
+{
     listen_sock = socket(AF_INET, SOCK_STREAM, 0);
 
-    if (listen_sock < 0) {
-        perror("socket");
-        exit(1);
-    }
+    int opt = 1;
+    setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
 
-    if (bind(listen_sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        perror("bind");
-        exit(1);
-    }
+    bind(listen_sock, (struct sockaddr *)&addr, sizeof(addr));
+    listen(listen_sock, 20);
 
-    if (listen(listen_sock, 5) < 0) {
-        perror("listen");
-        exit(1);
-    }
-
-    printf("SERVER STARTED ON PORT %d\n", port);
+    printf("[Main] Database ready.\n");
+    printf("[Server] Listening on port %d...\n", port);
 }
 
-void server_run() {
-    while (1) {
+void server_run()
+{
+    while (1)
+    {
         int client = accept(listen_sock, NULL, NULL);
-        if (client >= 0) {
-            printf("New client connected!\n");
+        int *p = malloc(sizeof(int));
+        *p = client;
 
-            // ------------------ ADD START ------------------
-            char buffer[256] = {0};
-            int bytes = recv(client, buffer, sizeof(buffer)-1, 0);
-
-            if (bytes > 0) {
-                printf("Received: %s\n", buffer);
-
-                char cmd[32], user[64], pass[64];
-                sscanf(buffer, "%31[^|]|%63[^|]|%63[^|]", cmd, user, pass);
-
-                if (strcmp(cmd, "LOGIN") == 0) {
-
-                    printf("Checking login for %s...\n", user);
-
-                    if (db_login(user, pass)) {
-                        send_response(client, "LOGIN_OK", "Welcome");
-                    } else {
-                        send_response(client, "LOGIN_FAIL", "Invalid username or password");
-                    }
-                }
-                else if (strcmp(cmd, "REGISTER") == 0) {
-
-                    if (db_register(user, pass)) {
-                        send_response(client, "REGISTER_SUCCESS", "Account created");
-                    } else {
-                        send_response(client, "REGISTER_FAIL", "Username already exists");
-                    }
-                }
-                else {
-                    send_response(client, "ERROR", "Invalid command");
-                }
-            }
-            // ------------------ ADD END ------------------
-            close(client);
-        }
+        pthread_t t;
+        pthread_create(&t, NULL, client_thread, p);
+        pthread_detach(t);
     }
-}
-
-
-void send_response(int sock, const char* status, const char* message) {
-    char buffer[256];
-    snprintf(buffer, sizeof(buffer), "%s|%s\n", status, message);
-    printf("Sending response: %s\n", buffer);
-    send(sock, buffer, strlen(buffer), 0);
 }

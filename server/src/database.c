@@ -1,58 +1,123 @@
-#include "database.h"
+#include "../include/database.h"
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 
-sqlite3* db = NULL;
+sqlite3* g_db = NULL;
 
-void db_init() {
-    if (sqlite3_open("battleship.db", &db) != SQLITE_OK) {
-        printf("Cannot open database!\n");
-        exit(1);
+int db_init(const char* filename)
+{
+    if (sqlite3_open(filename, &g_db) != SQLITE_OK) {
+        fprintf(stderr, "DB OPEN ERROR: %s\n", sqlite3_errmsg(g_db));
+        return -1;
     }
-    printf("Database connected!\n");
+
+    const char* sql =
+        "CREATE TABLE IF NOT EXISTS users ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " username TEXT UNIQUE,"
+        " password TEXT,"
+        " elo INTEGER DEFAULT 1000"
+        ");";
+
+    char* err = NULL;
+    if (sqlite3_exec(g_db, sql, NULL, NULL, &err) != SQLITE_OK) {
+        fprintf(stderr, "DB CREATE TABLE ERROR: %s\n", err);
+        sqlite3_free(err);
+        return -1;
+    }
+
+    return 0;
 }
 
-void db_close() {
-    if (db) sqlite3_close(db);
+void db_close(void)
+{
+    if (g_db) {
+        sqlite3_close(g_db);
+        g_db = NULL;
+    }
 }
 
-int db_register(const char* user, const char* pass) {
-    sqlite3_stmt* stmt;
-    const char* sql = "INSERT INTO users(username, password) VALUES(?, ?)";
-    
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
-        return 0;
+int db_register_user(const char* user, const char* pass,
+                     char* errbuf, size_t errsz)
+{
+    const char* sql =
+        "INSERT INTO users(username, password) VALUES(?, ?)";
 
-    sqlite3_bind_text(stmt, 1, user, -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, pass, -1, SQLITE_STATIC);
+    sqlite3_stmt* st = NULL;
 
-    if (sqlite3_step(stmt) != SQLITE_DONE) {
-        sqlite3_finalize(stmt);
-        return 0;   // insert fail (username exists)
+    if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL) != SQLITE_OK) {
+        snprintf(errbuf, errsz, "DB_ERROR");
+        return -1;
+    }
+
+    sqlite3_bind_text(st, 1, user, -1, SQLITE_STATIC);
+    sqlite3_bind_text(st, 2, pass, -1, SQLITE_STATIC);
+
+    int rc = sqlite3_step(st);
+    sqlite3_finalize(st);
+
+    if (rc != SQLITE_DONE) {
+        snprintf(errbuf, errsz, "USERNAME_EXISTS");
+        return -1;
+    }
+
+    return 0;
+}
+
+int db_login_user(const char* user, const char* pass,
+                  int* out_elo,
+                  char* errbuf, size_t errsz)
+{
+    const char* sql =
+        "SELECT password, elo FROM users WHERE username=?";
+
+    sqlite3_stmt* st = NULL;
+
+    if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL) != SQLITE_OK) {
+        snprintf(errbuf, errsz, "DB_ERROR");
+        return -1;
+    }
+
+    sqlite3_bind_text(st, 1, user, -1, SQLITE_STATIC);
+
+    int rc = sqlite3_step(st);
+
+    if (rc == SQLITE_ROW) {
+        const char* db_pass = (const char*)sqlite3_column_text(st, 0);
+        int elo = sqlite3_column_int(st, 1);
+
+        if (strcmp(db_pass, pass) == 0) {
+            if (out_elo) *out_elo = elo;
+            sqlite3_finalize(st);
+            return 0;
+        } else {
+            snprintf(errbuf, errsz, "WRONG_PASSWORD");
+            sqlite3_finalize(st);
+            return -1;
+        }
+    }
+
+    snprintf(errbuf, errsz, "USER_NOT_FOUND");
+    sqlite3_finalize(st);
+    return -1;
+}
+
+int db_get_elo(const char *username)
+{
+    sqlite3_stmt *stmt;
+    const char *sql = "SELECT elo FROM users WHERE username=?;";
+
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+        return 1000; // elo mặc định
+
+    sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
+
+    int elo = 1000;
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        elo = sqlite3_column_int(stmt, 0);
     }
 
     sqlite3_finalize(stmt);
-    return 1;       // success
+    return elo;
 }
-
-
-int db_login(const char* user, const char* pass) {
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT id FROM users WHERE username=? AND password=?";
-
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
-        return 0;
-
-    sqlite3_bind_text(stmt, 1, user, -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, pass, -1, SQLITE_STATIC);
-
-    int ret = 0;
-    if (sqlite3_step(stmt) == SQLITE_ROW)
-        ret = 1; // match
-
-    sqlite3_finalize(stmt);
-    return ret;
-}
-
-

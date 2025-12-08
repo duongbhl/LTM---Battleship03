@@ -1,9 +1,23 @@
-#include "server.h"
-#include "database.h"
+#include "../include/database.h"
+#include "../include/server.h"
+#include "../include/matchmaking.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 
-int main() {
-    db_init();                 //ket noi db
-    server_init(5050);         // tạo socket, bind, listen
-    server_run();              // vòng accept()
+int main(void)
+{
+    srand((unsigned int)time(NULL));
+
+    if (db_init("battleship.db") != 0) {
+        fprintf(stderr, "Failed to init database.\n");
+        return 1;
+    }
+    server_init(5050);
+
+    mm_start_worker();
+    server_run();
+
+    db_close();
     return 0;
 }
