@@ -10,6 +10,7 @@ class NetworkClient:
         self.sock_lock = threading.Lock()
         self.recv_queue = queue.Queue()
         self.alive = True
+        self.on_disconnect = None
 
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
@@ -21,6 +22,8 @@ class NetworkClient:
                 data = self.sock.recv(4096)
                 if not data:
                     self.alive = False
+                    if self.on_disconnect:
+                        self.on_disconnect()
                     break
                 # print("RAW RECV:", repr(data.decode()))
                 buffer += data.decode()
