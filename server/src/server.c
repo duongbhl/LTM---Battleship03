@@ -4,7 +4,6 @@
 #include "../include/game_session.h"
 #include "../include/database.h"
 #include "../include/utils.h"
-#include "../include/online_users.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +13,16 @@
 #include <arpa/inet.h>
 
 int listen_sock;
+
+static void *afk_watcher(void *arg)
+{
+    while (1) {
+        sleep(1);
+        gs_tick_afk();
+    }
+    return NULL;
+}
+
 
 static void *client_thread(void *arg)
 {
@@ -30,23 +39,21 @@ static void *client_thread(void *arg)
         printf("[RX sock=%d] %s", sock, buf);
         fflush(stdout);
         if (n <= 0) {
-            if (gs_player_in_game(sock) || mm_player_waiting(sock)) {
-                printf("[Server] Disconnect detected from sock=%d\n", sock);
-            }
+            printf("[Server] Disconnect detected sock=%d\n", sock);
 
-            if (gs_player_in_game(sock) && gs_game_alive(sock)) {
-                printf("[Server] Lost connection: %d → waiting 30 sec for reconnect...\n", sock);
+            if (gs_player_in_game(sock) && gs_game_alive(sock))
+            {
+                printf("[Server] Lost connection: %d → waiting 30 sec...\n", sock);
                 gs_handle_disconnect(sock);
-                break;
+                break;   
             }
 
             mm_remove_socket(sock);
-            printf("[Server] Client %d removed from matchmaking queue.\n", sock);
-
             user_set_offline_by_sock(sock);
-
-            break;
+            close(sock);
+            return NULL;
         }
+
 
         buf[n] = '\0';
         trim_newline(buf);
@@ -107,7 +114,7 @@ static void *client_thread(void *arg)
             gs_handle_move(sock, x, y);
             continue;
         }
-        else if (strcmp(cmd, "FORFEIT") == 0)
+                else if (strcmp(cmd, "FORFEIT") == 0)
         {
             printf("[Server] %d sent FORFEIT\n", sock);
             gs_forfeit(sock);
@@ -129,16 +136,6 @@ static void *client_thread(void *arg)
     return NULL;
 }
 
-static void *afk_watcher(void *arg)
-{
-    while (1) {
-        sleep(1);
-        gs_tick_afk();
-    }
-    return NULL;
-}
-
-
 void server_init(int port)
 {
     listen_sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -156,7 +153,6 @@ void server_init(int port)
 
     printf("[Main] Database ready.\n");
     printf("[Server] Listening on port %d...\n", port);
-
     pthread_t afk;
     pthread_create(&afk, NULL, afk_watcher, NULL);
     pthread_detach(afk);

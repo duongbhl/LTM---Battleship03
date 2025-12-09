@@ -86,9 +86,6 @@ static int try_match_elo_locked(void) {
         int window_i = elo_window_for_wait(wi);
 
         for (int j = i + 1; j < q_elo_len; j++) {
-            if (Q_elo[j].sock == Q_elo[i].sock) continue;
-            if (strcmp(Q_elo[j].user, Q_elo[i].user) == 0) continue;
-
             int wj = wait_seconds(&Q_elo[j]);
             if (wj >= 30) continue;
 
@@ -189,7 +186,6 @@ int mm_player_waiting(int sock) {
     return 0;
 }
 
-/* Remove a socket from both OPEN and ELO queues */
 void mm_remove_socket(int sock) {
     pthread_mutex_lock(&mm_lock);
 
