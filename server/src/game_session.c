@@ -411,11 +411,11 @@ void gs_handle_move(int sock, int x, int y)
     send_logged(enemy_sock, msg);
 
 
-    if (!g->alive)
+    if (!g->alive){
         send_logged(sock,       "GAMEOVER|WIN\n");
         send_logged(enemy_sock, "GAMEOVER|LOSE\n");
         return;
-
+    }
     if (!is_hit)
     {
         g->turn = (g->turn == 1 ? 2 : 1);
