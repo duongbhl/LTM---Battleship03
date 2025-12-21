@@ -30,16 +30,14 @@ void handle_register(int sock, const char *user, const char *pass)
 {
     char err[128];
 
-    if (db_register_user(user, pass, err, sizeof(err)) == 0)
-    {
-        // REGISTER_SUCCESS|message  ✅ để client lấy message hiển thị
-        send_logged(sock, "REGISTER_SUCCESS\n");
-    }
-    else
-    {
+    if (db_register_user(user, pass, err, sizeof(err)) == 0) {
+        // REGISTER_SUCCESS|message  
+        const char *msg = "REGISTER_SUCCESS|";
+        send_all(sock, msg, strlen(msg));
+    } else {
         // REGISTER_FAIL|reason
         char msg[256];
         snprintf(msg, sizeof(msg), "REGISTER_FAIL|%s\n", err);
-        send_logged(sock, msg);
+        send_all(sock, msg, strlen(msg));
     }
 }
