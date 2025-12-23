@@ -1,6 +1,10 @@
 # client/online_battleship_gui.py
 import pygame
 from network_client import NetworkClient
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # đọc file .env
 
 pygame.init()
 pygame.font.init()
@@ -85,7 +89,7 @@ def draw_grid(board, x0, y0, title_text):
             pygame.draw.rect(SCREEN, WHITE, (rx, ry, GRID_SIZE, GRID_SIZE), 1)
 
 
-def run_online_game(username, password, mode, host="127.0.0.1", port=5050):
+def run_online_game(username, password, mode, host=os.getenv('IP_PUBLIC'), port=5050):
     net = NetworkClient(host, port)
     my_elo = "?"
     opponent_elo = "?"
