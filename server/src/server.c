@@ -135,6 +135,13 @@ static void *client_thread(void *arg)
             continue;
         }
 
+        else if (strcmp(cmd, "CHAT") == 0 && parts >= 2)
+        {
+            gs_send_chat(sock, a);
+            continue;
+        }
+
+
         else if (strcmp(cmd, "GET_ONLINE") == 0)
         {
             char list[512];

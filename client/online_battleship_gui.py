@@ -41,6 +41,50 @@ font_title = pygame.font.SysFont("arial", 40, bold=True)
 font_text = pygame.font.SysFont("arial", 24)
 font_small = pygame.font.SysFont("arial", 20)
 
+EMOTE_SIZE = 48
+EMOTES = {
+    "😂": pygame.transform.smoothscale(
+        pygame.image.load("assets/emotes/joy.png").convert_alpha(),
+        (EMOTE_SIZE, EMOTE_SIZE)
+    ),
+    "😡": pygame.transform.smoothscale(
+        pygame.image.load("assets/emotes/angry.png").convert_alpha(),
+        (EMOTE_SIZE, EMOTE_SIZE)
+    ),
+    "😭": pygame.transform.smoothscale(
+        pygame.image.load("assets/emotes/cry.png").convert_alpha(),
+        (EMOTE_SIZE, EMOTE_SIZE)
+    ),
+    "😱": pygame.transform.smoothscale(
+        pygame.image.load("assets/emotes/scream.png").convert_alpha(),
+        (EMOTE_SIZE, EMOTE_SIZE)
+    ),
+    "🤔": pygame.transform.smoothscale(
+        pygame.image.load("assets/emotes/thinking.png").convert_alpha(),
+        (EMOTE_SIZE, EMOTE_SIZE)
+    ),
+    "🥱": pygame.transform.smoothscale(
+        pygame.image.load("assets/emotes/yawn.png").convert_alpha(),
+        (EMOTE_SIZE, EMOTE_SIZE)
+    ),
+    "😴": pygame.transform.smoothscale(
+        pygame.image.load("assets/emotes/sleep.png").convert_alpha(),
+        (EMOTE_SIZE, EMOTE_SIZE)
+    ),
+    "👍": pygame.transform.smoothscale(
+        pygame.image.load("assets/emotes/thumbs_up.png").convert_alpha(),
+        (EMOTE_SIZE, EMOTE_SIZE)
+    ),
+    "👎": pygame.transform.smoothscale(
+        pygame.image.load("assets/emotes/thumbs_down.png").convert_alpha(),
+        (EMOTE_SIZE, EMOTE_SIZE)
+    ),
+    "🏳️": pygame.transform.smoothscale(
+        pygame.image.load("assets/emotes/white_flag.png").convert_alpha(),
+        (EMOTE_SIZE, EMOTE_SIZE)
+    ),
+}
+
 
 class Button:
     def __init__(self, rect, text, font=font_text,
@@ -86,6 +130,30 @@ def draw_grid(board, x0, y0, title_text):
             pygame.draw.rect(SCREEN, color, (rx, ry, GRID_SIZE, GRID_SIZE))
             pygame.draw.rect(SCREEN, WHITE, (rx, ry, GRID_SIZE, GRID_SIZE), 1)
 
+def wrap_text(text, font, max_width):
+    words = text.split(" ")
+    lines = []
+    cur = ""
+
+    for w in words:
+        test = cur + (" " if cur else "") + w
+        if font.size(test)[0] <= max_width:
+            cur = test
+        else:
+            lines.append(cur)
+            cur = w
+
+    if cur:
+        lines.append(cur)
+    return lines
+
+def render_scrolled(font, text, max_width, color):
+    surf = font.render(text, True, color)
+    while surf.get_width() > max_width:
+        text = text[1:]
+        surf = font.render(text, True, color)
+    return surf
+
 
 def run_online_game(net, username, mode):
     my_elo = "?"
@@ -118,11 +186,29 @@ def run_online_game(net, username, mode):
     dc_start_time = 0         
     
     # react
-    last_react = None
-    react_time = 0
-    REACT_DURATION = 2.0   # seconds
-            
+    my_react = None
+    my_react_time = 0
 
+    opp_react = None
+    opp_react_time = 0
+
+    REACT_DURATION = 3.0  # seconds
+
+    # react UI
+    show_react_panel = False
+
+    react_emojis = ["😂", "😡", "😭", "😱" ,"🤔","🥱","😴","👍", "👎","🏳️"]
+    react_buttons = []
+
+    # chat
+    chat_active = False
+    chat_input = ""
+    chat_lines = []     # list[str]
+    MAX_CHAT_LINES = 6
+
+    INPUT_H = 36
+    INPUT_Y = REAL_HEIGHT - 60 - 6 - INPUT_H
+            
     # Queue timer
     queue_started_at = None
     queue_elapsed = 0
@@ -131,6 +217,44 @@ def run_online_game(net, username, mode):
 
     exit_button = Button((REAL_WIDTH - 180, 20, 160, 40), "Back to Menu")
     show_button = Button((REAL_WIDTH - 360, 20, 160, 40), "Show Ships")
+    chat_button = Button(
+        (20, REAL_HEIGHT - 60, 100, 40),
+        "Chat"
+    )
+
+    react_button = Button(
+        (130, REAL_HEIGHT - 60, 100, 40),
+        "React"
+    )
+    PANEL_COLS = 5
+    PANEL_ROWS = 2
+
+    EMO_SIZE = 48          # kích thước icon
+    EMO_GAP  = 12          # khoảng cách GIỮA các emoji
+
+    CELL = EMO_SIZE + EMO_GAP
+    PANEL_PADDING = 16
+
+    panel_w = PANEL_COLS * CELL + PANEL_PADDING * 2
+    panel_h = PANEL_ROWS * CELL + PANEL_PADDING * 2
+
+    panel_x = 20
+    panel_y = REAL_HEIGHT - panel_h - 90   # đẩy panel lên cao hơn
+
+
+    for idx, emo in enumerate(react_emojis):
+        row = idx // PANEL_COLS
+        col = idx % PANEL_COLS
+
+        rect = pygame.Rect(
+            panel_x + PANEL_PADDING + col * CELL,
+            panel_y + PANEL_PADDING + row * CELL,
+            EMO_SIZE + 8,
+            EMO_SIZE + 8
+        )
+        react_buttons.append({"emoji": emo, "rect": rect})
+
+
 
 
     running = True
@@ -222,9 +346,22 @@ def run_online_game(net, username, mode):
                         phase = "gameover"
                         result = "LOSE"
 
-                elif cmd == "REACT":
-                    last_react = parts[1]
-                    react_time = pygame.time.get_ticks()
+                elif cmd == "MY_REACT":
+                    emoji = parts[1]
+                    my_react = emoji
+                    my_react_time = pygame.time.get_ticks()
+
+                elif cmd == "OPPONENT_REACT":
+                    emoji = parts[1]
+                    opp_react = emoji
+                    opp_react_time = pygame.time.get_ticks()
+
+                elif cmd == "CHAT":
+                    sender = parts[1]
+                    text = parts[2]
+                    chat_lines.append(f"[{sender}]: {text}")
+                    if len(chat_lines) > MAX_CHAT_LINES:
+                        chat_lines.pop(0)
 
                 elif cmd == "GAMEOVER":
                     if len(parts) >= 2:
@@ -250,6 +387,21 @@ def run_online_game(net, username, mode):
             elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
                 running = False
 
+            elif ev.type == pygame.KEYDOWN and chat_active:
+                if ev.key == pygame.K_RETURN:
+                    if chat_input.strip():
+                        net.send(f"CHAT|{chat_input.strip()}")
+                    chat_input = ""
+                    chat_active = False
+
+                elif ev.key == pygame.K_BACKSPACE:
+                    chat_input = chat_input[:-1]
+
+                else:
+                    if len(chat_input) < 80:
+                        chat_input += ev.unicode
+
+
             elif ev.type == pygame.KEYDOWN and phase == "playing":
                 if ev.key == pygame.K_1:
                     net.send("REACT|😂")
@@ -263,6 +415,8 @@ def run_online_game(net, username, mode):
                 exit_button.update_hover(mouse_pos)
                 if phase in ("playing", "gameover"):
                     show_button.update_hover(mouse_pos)
+                    chat_button.update_hover(mouse_pos)
+                    react_button.update_hover(mouse_pos)
                 else:
                     show_button.is_hover = False
 
@@ -283,6 +437,23 @@ def run_online_game(net, username, mode):
                     # --- After match → Back to menu ---
                     elif phase == "gameover":
                         running = False
+
+                if phase == "playing":
+                    if chat_button.clicked(ev):
+                        chat_active = True
+
+                    elif react_button.clicked(ev):
+                        show_react_panel = not show_react_panel
+                
+                if show_react_panel:
+                    for r in react_buttons:
+                        if r["rect"].collidepoint(ev.pos):
+                            emoji = r["emoji"]
+                            net.send(f"REACT|{emoji}")
+
+                            show_react_panel = False
+                            break
+
 
                 if phase in ("playing", "gameover") and show_button.clicked(ev):
                     show_my_ships = not show_my_ships
@@ -332,20 +503,7 @@ def run_online_game(net, username, mode):
 
         SCREEN.blit(font_text.render(message, True, message_color),
                     (SIDE_PADDING, TOP_BANNER_HEIGHT + 40))
-        
-        # Draw react
-        if last_react:
-            elapsed = (pygame.time.get_ticks() - react_time) / 1000
-            if elapsed < REACT_DURATION:
-                react_surf = font_title.render(last_react, True, (255, 255, 255))
-                SCREEN.blit(
-                    react_surf,
-                    react_surf.get_rect(center=(REAL_WIDTH // 2, GRID_Y - 80))
-                )
-            else:
-                last_react = None
-
-        
+              
         if phase == "playing" and turn_started_at:
             elapsed = (pygame.time.get_ticks() - turn_started_at) / 1000
             remain = max(0, TURN_TIME - int(elapsed))
@@ -381,7 +539,65 @@ def run_online_game(net, username, mode):
                         pygame.draw.rect(SCREEN, SHIP_COLOR,
                                          (rx, ry, GRID_SIZE, GRID_SIZE), 0)
 
+            # draw enemy board
             draw_grid(enemy_board, RIGHT_GRID_X, GRID_Y, "Enemy board")
+
+            # ---- CHAT BOX ----
+            CHAT_W = 360
+            CHAT_X = LEFT_GRID_X
+
+            CHAT_TOP_Y = GRID_Y + 8 * GRID_SIZE
+            CHAT_BOTTOM_Y = GRID_Y + 10 * GRID_SIZE
+
+            CHAT_Y = CHAT_TOP_Y
+            CHAT_H = CHAT_BOTTOM_Y - CHAT_TOP_Y
+
+            TOP_PADDING_CHAT = 8
+
+            padding = 8
+            line_h = font_small.get_height() + 2
+
+            chat_bg = pygame.Surface((CHAT_W, CHAT_H), pygame.SRCALPHA)
+            chat_bg.fill((0, 0, 0, 64))  # r,g,b,opacity
+            SCREEN.blit(chat_bg, (CHAT_X, CHAT_Y))
+
+            y = CHAT_Y + CHAT_H - padding - TOP_PADDING_CHAT
+
+            # duyệt chat từ mới nhất
+            for line in reversed(chat_lines):
+                wrapped = wrap_text(line, font_small, CHAT_W - 16)
+
+                for w in reversed(wrapped):
+                    y -= line_h
+                    if y < CHAT_Y + TOP_PADDING_CHAT:
+                        break
+
+                    # text chính
+                    surf = font_small.render(w, True, TEXT)
+                    SCREEN.blit(surf, (CHAT_X + 8, y))
+
+            
+            if chat_active:
+                input_w = CHAT_W
+                input_h = INPUT_H
+                input_x = CHAT_X
+                input_y = INPUT_Y
+
+                pygame.draw.rect(
+                    SCREEN, (40, 50, 70),
+                    (input_x, input_y, input_w, input_h),
+                    border_radius=8
+                )
+
+                display_text = chat_input + "|"
+                txt = render_scrolled(
+                    font_text,
+                    display_text,
+                    input_w - 16,
+                    WHITE
+                )
+                SCREEN.blit(txt, (input_x + 8, input_y + 6))
+
 
         else:
             center_msg = "Finding opponent..." if phase.startswith("queue") else "Connecting..."
@@ -413,15 +629,71 @@ def run_online_game(net, username, mode):
             exit_button.color = (90, 110, 160)
             exit_button.hover = (120, 140, 190)
 
+        if show_react_panel:
+            pygame.draw.rect(
+                SCREEN,
+                (28, 38, 58),
+                (panel_x - 4, panel_y - 4, panel_w + 8, panel_h + 8),
+                border_radius=14
+            )
+
+            for r in react_buttons:
+                if r["rect"].collidepoint(mouse_pos):
+                    pygame.draw.rect(SCREEN, (90, 110, 140), r["rect"], border_radius=8)
+                else:
+                    pygame.draw.rect(SCREEN, (60, 70, 90), r["rect"], border_radius=8)
+                SCREEN.blit(
+                    EMOTES[r["emoji"]],
+                    EMOTES[r["emoji"]].get_rect(center=r["rect"].center)
+                )
+
+        
         exit_button.draw(SCREEN)
         if phase in ("playing", "gameover"):
             show_button.draw(SCREEN)
+            chat_button.draw(SCREEN)
+            react_button.draw(SCREEN)
 
         # Draw opponent info
         info_y = TOP_BANNER_HEIGHT - 25
         info_surf = font_small.render(info, True, TEXT)
         info_x = SIDE_PADDING
         SCREEN.blit(info_surf, (info_x, info_y))
+
+        now = pygame.time.get_ticks()
+
+        # ---- MY REACT (left side) ----
+        if my_react:
+            elapsed = (now - my_react_time) / 1000
+            if elapsed < REACT_DURATION:
+                my_react_x = LEFT_GRID_X
+                my_react_y = GRID_Y - 30 + 22
+
+                SCREEN.blit(
+                    EMOTES[my_react],
+                    (my_react_x, my_react_y)
+                )
+            else:
+                my_react = None
+
+
+        # ---- OPPONENT REACT (right side) ----
+        if opp_react:
+            elapsed = (now - opp_react_time) / 1000
+            if elapsed < REACT_DURATION:
+
+                opp_react_x = RIGHT_GRID_X
+                opp_react_y = GRID_Y - 30 + 22   
+
+                SCREEN.blit(
+                    EMOTES[opp_react],
+                    (opp_react_x, opp_react_y)
+                )
+
+
+            else:
+                opp_react = None
+
 
         # Draw disconnect countdown 
         if opponent_dc:

@@ -528,6 +528,30 @@ void gs_send_react(int from_sock, const char *emoji)
         return;
 
     char msg[128];
+
+    snprintf(msg, sizeof(msg), "MY_REACT|%s\n", emoji);
+    send_logged(from_sock, msg);
+
     snprintf(msg, sizeof(msg), "OPPONENT_REACT|%s\n", emoji);
     send_logged(opponent, msg);
+}
+
+void gs_send_chat(int from_sock, const char *msg)
+{
+    Game *g = find_game(from_sock);
+    if (!g || !g->alive)
+        return;
+
+    const char *sender =
+        (from_sock == g->p1) ? g->user1 : g->user2;
+
+    char buf[512];
+
+    snprintf(buf, sizeof(buf),
+             "CHAT|%s|%s\n", sender, msg);
+    send_logged(from_sock, buf);
+
+    int opp = gs_get_opponent_sock(from_sock);
+    if (opp > 0)
+        send_logged(opp, buf);
 }

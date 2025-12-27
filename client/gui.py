@@ -43,7 +43,7 @@ def render_scrolled(font, text, max_width, color):
 
 
 # GLOBAL SESSION MANAGEMENT
-current_user = None
+current_user = None 
 current_password = None  # giữ password tạm trong session để login socket gameplay
 is_logged_in = False
 session_sock = None
