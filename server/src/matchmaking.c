@@ -67,7 +67,7 @@ static void match_open_rank_locked(Player me) {
     printf("[MM][OPEN] Match found: %s vs %s\n", p.user, me.user);
     fflush(stdout);
 
-    gs_create_session(p.sock, p.user, p.elo, me.sock, me.user, me.elo);
+    gs_create_session(p.sock, p.user, p.elo, me.sock, me.user, me.elo, 0);
 }
 
 /* Try to match in ELO queue using dynamic windows.
@@ -119,7 +119,7 @@ static int try_match_elo_locked(void) {
            best_diff, a.user, a.elo, b.user, b.elo);
     fflush(stdout);
 
-    gs_create_session(a.sock, a.user, a.elo, b.sock, b.user, b.elo);
+    gs_create_session(a.sock, a.user, a.elo, b.sock, b.user, b.elo, 1);
     return 1;
 }
 

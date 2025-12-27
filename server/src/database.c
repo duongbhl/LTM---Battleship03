@@ -1,17 +1,19 @@
 #include "../include/database.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
-sqlite3* g_db = NULL;
+sqlite3 *g_db = NULL;
 
-int db_init(const char* filename)
+int db_init(const char *filename)
 {
-    if (sqlite3_open(filename, &g_db) != SQLITE_OK) {
+    if (sqlite3_open(filename, &g_db) != SQLITE_OK)
+    {
         fprintf(stderr, "DB OPEN ERROR: %s\n", sqlite3_errmsg(g_db));
         return -1;
     }
 
-    const char* sql =
+    const char *sql =
         "CREATE TABLE IF NOT EXISTS users ("
         " id INTEGER PRIMARY KEY AUTOINCREMENT,"
         " username TEXT UNIQUE,"
@@ -19,9 +21,26 @@ int db_init(const char* filename)
         " elo INTEGER DEFAULT 1000"
         ");";
 
-    char* err = NULL;
-    if (sqlite3_exec(g_db, sql, NULL, NULL, &err) != SQLITE_OK) {
+    const char *sql_matches =
+        "CREATE TABLE IF NOT EXISTS matches ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " user TEXT NOT NULL,"
+        " opponent TEXT NOT NULL,"
+        " result TEXT NOT NULL,"
+        " elo_change INTEGER NOT NULL,"
+        " created_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+        ");";
+
+    char *err = NULL;
+    if (sqlite3_exec(g_db, sql, NULL, NULL, &err) != SQLITE_OK)
+    {
         fprintf(stderr, "DB CREATE TABLE ERROR: %s\n", err);
+        sqlite3_free(err);
+        return -1;
+    }
+    if (sqlite3_exec(g_db, sql_matches, NULL, NULL, &err) != SQLITE_OK)
+    {
+        fprintf(stderr, "DB CREATE MATCHES TABLE ERROR: %s\n", err);
         sqlite3_free(err);
         return -1;
     }
@@ -31,21 +50,22 @@ int db_init(const char* filename)
 
 void db_close(void)
 {
-    if (g_db) {
+    if (g_db)
+    {
         sqlite3_close(g_db);
         g_db = NULL;
     }
 }
 
-int db_register_user(const char* user, const char* pass,
-                     char* errbuf, size_t errsz)
+int db_register_user(const char *user, const char *pass, char *errbuf, size_t errsz)
 {
-    const char* sql =
+    const char *sql =
         "INSERT INTO users(username, password) VALUES(?, ?)";
 
-    sqlite3_stmt* st = NULL;
+    sqlite3_stmt *st = NULL;
 
-    if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL) != SQLITE_OK)
+    {
         snprintf(errbuf, errsz, "DB_ERROR");
         return -1;
     }
@@ -56,7 +76,8 @@ int db_register_user(const char* user, const char* pass,
     int rc = sqlite3_step(st);
     sqlite3_finalize(st);
 
-    if (rc != SQLITE_DONE) {
+    if (rc != SQLITE_DONE)
+    {
         snprintf(errbuf, errsz, "USERNAME_EXISTS");
         return -1;
     }
@@ -64,16 +85,15 @@ int db_register_user(const char* user, const char* pass,
     return 0;
 }
 
-int db_login_user(const char* user, const char* pass,
-                  int* out_elo,
-                  char* errbuf, size_t errsz)
+int db_login_user(const char *user, const char *pass, int *out_elo, char *errbuf, size_t errsz)
 {
-    const char* sql =
+    const char *sql =
         "SELECT password, elo FROM users WHERE username=?";
 
-    sqlite3_stmt* st = NULL;
+    sqlite3_stmt *st = NULL;
 
-    if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL) != SQLITE_OK)
+    {
         snprintf(errbuf, errsz, "DB_ERROR");
         return -1;
     }
@@ -82,15 +102,20 @@ int db_login_user(const char* user, const char* pass,
 
     int rc = sqlite3_step(st);
 
-    if (rc == SQLITE_ROW) {
-        const char* db_pass = (const char*)sqlite3_column_text(st, 0);
+    if (rc == SQLITE_ROW)
+    {
+        const char *db_pass = (const char *)sqlite3_column_text(st, 0);
         int elo = sqlite3_column_int(st, 1);
 
-        if (strcmp(db_pass, pass) == 0) {
-            if (out_elo) *out_elo = elo;
+        if (strcmp(db_pass, pass) == 0)
+        {
+            if (out_elo)
+                *out_elo = elo;
             sqlite3_finalize(st);
             return 0;
-        } else {
+        }
+        else
+        {
             snprintf(errbuf, errsz, "WRONG_PASSWORD");
             sqlite3_finalize(st);
             return -1;
@@ -114,10 +139,110 @@ int db_get_elo(const char *username)
 
     int elo = 1000;
 
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
+    if (sqlite3_step(stmt) == SQLITE_ROW)
+    {
         elo = sqlite3_column_int(stmt, 0);
     }
 
     sqlite3_finalize(stmt);
     return elo;
+}
+
+void db_set_elo(const char *username, int elo)
+{
+    if (!g_db || !username)
+        return;
+
+    const char *sql =
+        "UPDATE users SET elo = ? WHERE username = ?;";
+
+    sqlite3_stmt *stmt = NULL;
+
+    int rc = sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK)
+    {
+        fprintf(stderr,
+                "[DB] db_set_elo prepare failed: %s\n",
+                sqlite3_errmsg(g_db));
+        return;
+    }
+
+    sqlite3_bind_int(stmt, 1, elo);
+    sqlite3_bind_text(stmt, 2, username, -1, SQLITE_TRANSIENT);
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE)
+    {
+        fprintf(stderr,
+                "[DB] db_set_elo step failed: %s\n",
+                sqlite3_errmsg(g_db));
+    }
+    else if (sqlite3_changes(g_db) == 0)
+    {
+        fprintf(stderr,
+                "[DB] db_set_elo warning: user '%s' not found\n",
+                username);
+    }
+
+    sqlite3_finalize(stmt);
+}
+
+void db_add_history(const char *user,
+                    const char *opponent,
+                    const char *result,
+                    int elo_change)
+{
+    if (!g_db)
+        return;
+
+    const char *sql =
+        "INSERT INTO matches (user, opponent, result, elo_change)"
+        " VALUES (?, ?, ?, ?);";
+
+    sqlite3_stmt *stmt;
+
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+        return;
+
+    sqlite3_bind_text(stmt, 1, user, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, opponent, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, result, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 4, elo_change);
+
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+void db_get_history(const char *user, int sock)
+{
+    const char *sql =
+        "SELECT created_at, result, opponent, elo_change "
+        "FROM matches "
+        "WHERE user = ? "
+        "ORDER BY created_at DESC "
+        "LIMIT 20;";
+
+    sqlite3_stmt *stmt;
+
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+        return;
+
+    sqlite3_bind_text(stmt, 1, user, -1, SQLITE_TRANSIENT);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW)
+    {
+        const char *date = (const char *)sqlite3_column_text(stmt, 0);
+        const char *result = (const char *)sqlite3_column_text(stmt, 1);
+        const char *opp = (const char *)sqlite3_column_text(stmt, 2);
+        int elo = sqlite3_column_int(stmt, 3);
+
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "HISTORY|%s|%s|%s|%+d\n",
+                 date, result, opp, elo);
+
+        send_logged(sock, buf);
+    }
+
+    sqlite3_finalize(stmt);
 }

@@ -16,13 +16,14 @@ typedef struct
 {
     int p1, p2;
     char user1[32], user2[32];
+    int ranked;
     int elo1, elo2;
 
-    int turn; 
+    int turn;
     int alive;
 
-    int dc_sock;            
-    time_t dc_expire; 
+    int dc_sock;
+    time_t dc_expire;
 
     unsigned char ships1[CELLS];
     unsigned char ships2[CELLS];
@@ -75,7 +76,8 @@ static int place_ship(unsigned char ships[CELLS], int length)
                 break;
             }
         }
-        if (!ok) continue;
+        if (!ok)
+            continue;
 
         // 2) check xung quanh tàu
         int minx = x - 1;
@@ -83,10 +85,14 @@ static int place_ship(unsigned char ships[CELLS], int length)
         int miny = y - 1;
         int maxy = endy + 1;
 
-        if (minx < 0) minx = 0;
-        if (miny < 0) miny = 0;
-        if (maxx >= BOARD_N) maxx = BOARD_N - 1;
-        if (maxy >= BOARD_N) maxy = BOARD_N - 1;
+        if (minx < 0)
+            minx = 0;
+        if (miny < 0)
+            miny = 0;
+        if (maxx >= BOARD_N)
+            maxx = BOARD_N - 1;
+        if (maxy >= BOARD_N)
+            maxy = BOARD_N - 1;
 
         for (int iy = miny; iy <= maxy; iy++)
         {
@@ -114,8 +120,9 @@ static int place_ship(unsigned char ships[CELLS], int length)
             }
         }
 
-SKIP_PLACEMENT:
-        if (!ok) continue;
+    SKIP_PLACEMENT:
+        if (!ok)
+            continue;
 
         for (int k = 0; k < length; k++)
         {
@@ -182,10 +189,12 @@ static int collect_ship_cells(unsigned char ships[], int idx, int out_cells[], i
 
     // 1) Kiểm tra tàu nằm ngang
     int left = cx, right = cx;
-    while (left > 0     && ships[cy * BOARD_N + (left - 1)] != 0) left--;
-    while (right < 9    && ships[cy * BOARD_N + (right + 1)] != 0) right++;
+    while (left > 0 && ships[cy * BOARD_N + (left - 1)] != 0)
+        left--;
+    while (right < 9 && ships[cy * BOARD_N + (right + 1)] != 0)
+        right++;
 
-    if (left != right)  // tàu nằm ngang
+    if (left != right) // tàu nằm ngang
     {
         for (int x = left; x <= right; x++)
         {
@@ -198,8 +207,10 @@ static int collect_ship_cells(unsigned char ships[], int idx, int out_cells[], i
 
     // 2) Không phải tàu ngang → thử tàu dọc
     int top = cy, bottom = cy;
-    while (top > 0      && ships[(top - 1) * BOARD_N + cx] != 0) top--;
-    while (bottom < 9   && ships[(bottom + 1) * BOARD_N + cx] != 0) bottom++;
+    while (top > 0 && ships[(top - 1) * BOARD_N + cx] != 0)
+        top--;
+    while (bottom < 9 && ships[(bottom + 1) * BOARD_N + cx] != 0)
+        bottom++;
 
     for (int y = top; y <= bottom; y++)
     {
@@ -211,20 +222,18 @@ static int collect_ship_cells(unsigned char ships[], int idx, int out_cells[], i
     return 1;
 }
 
-
 // Check if all those cells are hit = 2
 static int ship_is_sunk(unsigned char ships[], int cells[], int count)
 {
     for (int i = 0; i < count; i++)
     {
-        if (ships[cells[i]] != 2) return 0;
+        if (ships[cells[i]] != 2)
+            return 0;
     }
     return 1;
 }
 
-
-void gs_create_session(int s1, const char *u1, int e1,
-                       int s2, const char *u2, int e2)
+void gs_create_session(int s1, const char *u1, int e1, int s2, const char *u2, int e2, int ranked)
 {
     if (game_count >= MAX_GAMES)
     {
@@ -243,13 +252,13 @@ void gs_create_session(int s1, const char *u1, int e1,
 
     g->elo1 = e1;
     g->elo2 = e2;
+    g->ranked = ranked;
 
     g->turn = 1;
     g->alive = 1;
 
     g->dc_sock = 0;
     g->dc_expire = 0;
-
 
     clear_board(g->shots_by_p1, 'U');
     clear_board(g->shots_by_p2, 'U');
@@ -267,7 +276,7 @@ void gs_create_session(int s1, const char *u1, int e1,
     send_logged(g->p1, msg1);
     send_logged(g->p2, msg2);
 
-    //Send ships to each player */
+    // Send ships to each player */
     char buf1[200], buf2[200], send1[240], send2[240];
 
     for (int i = 0; i < CELLS; i++)
@@ -337,7 +346,7 @@ void gs_handle_move(int sock, int x, int y)
         my_shots[idx] = 'H';
         (*enemy_remaining)--;
 
-        // detect ship's full segment 
+        // detect ship's full segment
         collect_ship_cells(enemy_ships, idx, cells, &count);
         int sunk = ship_is_sunk(enemy_ships, cells, count);
         result = sunk ? "SUNK" : "HIT";
@@ -358,7 +367,7 @@ void gs_handle_move(int sock, int x, int y)
         status_enemy = "LOSE";
         g->alive = 0;
     }
-    
+
     char msg[256];
 
     if (strcmp(result, "SUNK") == 0)
@@ -370,21 +379,21 @@ void gs_handle_move(int sock, int x, int y)
             sprintf(t, "%d,", cells[i]);
             strcat(list, t);
         }
-        if (count > 0) list[strlen(list)-1] = 0; // remove last comma
+        if (count > 0)
+            list[strlen(list) - 1] = 0; // remove last comma
 
         snprintf(msg, sizeof(msg),
-                "MOVE_RESULT|%d|%d|HIT|STATUS=SUNK|%s\n",
-                x, y, list);
+                 "MOVE_RESULT|%d|%d|HIT|STATUS=SUNK|%s\n",
+                 x, y, list);
     }
 
     else
     {
         snprintf(msg, sizeof(msg),
-                "MOVE_RESULT|%d|%d|%s|STATUS=%s\n",
-                x, y, result, status_me);
+                 "MOVE_RESULT|%d|%d|%s|STATUS=%s\n",
+                 x, y, result, status_me);
     }
     send_logged(sock, msg);
-
 
     if (strcmp(result, "SUNK") == 0)
     {
@@ -395,27 +404,68 @@ void gs_handle_move(int sock, int x, int y)
             sprintf(t, "%d,", cells[i]);
             strcat(list, t);
         }
-        if (count > 0) list[strlen(list) - 1] = 0; // remove trailing comma
+        if (count > 0)
+            list[strlen(list) - 1] = 0; // remove trailing comma
 
         snprintf(msg, sizeof(msg),
-                "OPPONENT_MOVE|%d|%d|HIT|STATUS=SUNK|%s\n",
-                x, y, list);
+                 "OPPONENT_MOVE|%d|%d|HIT|STATUS=SUNK|%s\n",
+                 x, y, list);
     }
 
     else
     {
         snprintf(msg, sizeof(msg),
-                "OPPONENT_MOVE|%d|%d|%s|STATUS=%s\n",
-                x, y, result, status_enemy);
+                 "OPPONENT_MOVE|%d|%d|%s|STATUS=%s\n",
+                 x, y, result, status_enemy);
     }
     send_logged(enemy_sock, msg);
 
+    if (!g->alive)
+    {
+        if (g->ranked)
+        {
+            int Ra = g->elo1;
+            int Rb = g->elo2;
+            int newRa, newRb;
 
-    if (!g->alive){
-        send_logged(sock,       "GAMEOVER|WIN\n");
+            if (is_p1)
+            {
+                elo_update_pair(Ra, Rb, 1, 32, &newRa, &newRb);
+                db_set_elo(g->user1, newRa);
+                db_set_elo(g->user2, newRb);
+
+                db_add_history(g->user1, g->user2, "WIN", newRa - Ra);
+                db_add_history(g->user2, g->user1, "LOSE", newRb - Rb);
+            }
+            else
+            {
+                elo_update_pair(Rb, Ra, 1, 32, &newRb, &newRa);
+                db_set_elo(g->user1, newRa);
+                db_set_elo(g->user2, newRb);
+
+                db_add_history(g->user2, g->user1, "WIN", newRb - Rb);
+                db_add_history(g->user1, g->user2, "LOSE", newRa - Ra);
+            }
+        }
+
+        if (is_p1)
+        {
+
+            db_add_history(g->user1, g->user2, "WIN", 0);
+            db_add_history(g->user2, g->user1, "LOSE", 0);
+        }
+        else
+        {
+
+            db_add_history(g->user2, g->user1, "WIN", 0);
+            db_add_history(g->user1, g->user2, "LOSE", 0);
+        }
+
+        send_logged(sock, "GAMEOVER|WIN\n");
         send_logged(enemy_sock, "GAMEOVER|LOSE\n");
         return;
     }
+
     if (!is_hit)
     {
         g->turn = (g->turn == 1 ? 2 : 1);
@@ -452,7 +502,8 @@ void gs_tick_afk(void)
     for (int i = 0; i < game_count; i++)
     {
         Game *g = &games[i];
-        if (!g->alive) continue;
+        if (!g->alive)
+            continue;
 
         if (g->dc_sock != 0 && now >= g->dc_expire)
         {
@@ -471,8 +522,47 @@ void gs_forfeit(int sock)
     int is_p1 = (sock == g->p1);
     int winner_sock = is_p1 ? g->p2 : g->p1;
 
+    if (g->ranked)
+    {
+        int Ra = g->elo1;
+        int Rb = g->elo2;
+        int newRa, newRb;
+
+        if (is_p1)
+        {
+            elo_update_pair(Ra, Rb, 1, 32, &newRa, &newRb);
+            db_set_elo(g->user1, newRa);
+            db_set_elo(g->user2, newRb);
+
+            db_add_history(g->user1, g->user2, "WIN", newRa - Ra);
+            db_add_history(g->user2, g->user1, "LOSE", newRb - Rb);
+        }
+        else
+        {
+            elo_update_pair(Rb, Ra, 1, 32, &newRb, &newRa);
+            db_set_elo(g->user1, newRa);
+            db_set_elo(g->user2, newRb);
+
+            db_add_history(g->user2, g->user1, "WIN", newRb - Rb);
+            db_add_history(g->user1, g->user2, "LOSE", newRa - Ra);
+        }
+    }
+
+    if (is_p1)
+    {
+
+        db_add_history(g->user1, g->user2, "WIN", 0);
+        db_add_history(g->user2, g->user1, "LOSE", 0);
+    }
+    else
+    {
+
+        db_add_history(g->user2, g->user1, "WIN", 0);
+        db_add_history(g->user1, g->user2, "LOSE", 0);
+    }
+
     send_logged(winner_sock, "GAMEOVER|WIN\n");
-    send_logged(sock,         "GAMEOVER|LOSE\n");
+    send_logged(sock, "GAMEOVER|LOSE\n");
 
     g->alive = 0;
     g->dc_sock = 0;

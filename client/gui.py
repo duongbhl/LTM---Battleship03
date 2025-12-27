@@ -339,7 +339,6 @@ def login_screen():
         clock.tick(60)
 
 
-
 def register_screen():
     """Màn hình đăng ký - Returns True nếu thành công"""
     input_w = int(MENU_WIDTH * 0.40)
@@ -563,6 +562,79 @@ def register_screen():
         clock.tick(60)
 
 
+def show_history(username):
+    net = NetworkClient()
+    net.send(f"GET_HISTORY|{username}")
+
+    history = []   # mỗi phần tử: (date, result, opponent, elo)
+    clock = pygame.time.Clock()
+    running = True
+
+    while running:
+        # ---- HANDLE NETWORK ----
+        msg = net.read_nowait()
+        if msg:
+            if msg == "HISTORY_END":
+                # đã nhận xong lịch sử
+                pass
+            elif msg.startswith("HISTORY|"):
+                parts = msg.split("|")
+                if len(parts) >= 5:
+                    date = parts[1]
+                    result = parts[2]
+                    opponent = parts[3]
+                    elo = parts[4]
+                    history.append((date, result, opponent, elo))
+
+        # ---- EVENTS ----
+        for ev in pygame.event.get():
+            if ev.type == pygame.QUIT:
+                running = False
+            elif ev.type == pygame.KEYDOWN:
+                if ev.key == pygame.K_ESCAPE:
+                    running = False
+
+        # ---- RENDER ----
+        SCREEN.fill((30, 30, 50))
+
+        title = font_title.render("MATCH HISTORY", True, TITLE_COLOR)
+        SCREEN.blit(title, title.get_rect(center=(MENU_WIDTH // 2, 80)))
+
+        if not history:
+            empty = font_small.render(
+                "No match history found",
+                True,
+                (180, 180, 200)
+            )
+            SCREEN.blit(
+                empty,
+                empty.get_rect(center=(MENU_WIDTH // 2, MENU_HEIGHT // 2))
+            )
+        else:
+            y = 160
+            for date, result, opponent, elo in history[:10]:
+                text = f"{date} | {result} vs {opponent} ({elo})"
+                color = SUCCESS_COLOR if result == "WIN" else ERROR_COLOR
+                line = font_small.render(text, True, color)
+                SCREEN.blit(line, (200, y))
+                y += 36
+
+        hint = font_small.render(
+            "Press ESC to return",
+            True,
+            (150, 150, 170)
+        )
+        SCREEN.blit(
+            hint,
+            hint.get_rect(center=(MENU_WIDTH // 2, MENU_HEIGHT - 50))
+        )
+
+        pygame.display.flip()
+        clock.tick(60)
+
+    net.close()
+
+
 
 def pre_login_menu():
     """Menu trước khi đăng nhập: Login/Register + Exit"""
@@ -649,7 +721,11 @@ def main_menu():
             ((MENU_WIDTH - button_width) // 2, start_y + (button_height + spacing), button_width, button_height),
             "PvP - Open Rank"
         ),
-        
+        "history": Button(
+            ((MENU_WIDTH - button_width)//2, start_y + (button_height + spacing)*4, button_width, button_height),
+            "Match History"
+        ),
+
         "logout": Button(
             ((MENU_WIDTH - button_width) // 2, start_y + (button_height + spacing)*2, button_width, button_height),
             "Logout",
@@ -710,6 +786,9 @@ def main_menu():
                         current_user = None
                         is_logged_in = False
                         return  # Quay về pre-login menu
+                    elif key == "history":
+                        show_history(current_user)
+
                     elif key == "exit":
                         pygame.quit()
                         exit()
