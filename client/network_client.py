@@ -2,20 +2,15 @@
 import socket
 import threading
 import queue
-from dotenv import load_dotenv
-import os
-
-load_dotenv()  # đọc file .env
 
 class NetworkClient:
-    def __init__(self, host=os.getenv('IP_PUBLIC'), port=5050):
+    def __init__(self, host="10.242.244.3", port=5050): 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((host, port))
         self.sock_lock = threading.Lock()
         self.recv_queue = queue.Queue()
         self.alive = True
-        self.on_disconnect = None
-
+        self.on_disconnect = None                         
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
 

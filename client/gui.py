@@ -2,10 +2,6 @@ import pygame
 import socket
 import time
 from network_client import NetworkClient
-from dotenv import load_dotenv
-import os
-
-load_dotenv()  # đọc file .env
 
 pygame.init()
 pygame.font.init()
@@ -100,10 +96,10 @@ def send_auth_request(command, username, password):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5)
-        sock.connect((os.getenv('IP_PUBLIC'), 5050))
+        sock.connect(("10.242.244.3", 5050)) 
         
-        request = f"{command}|{username}|{password}"
-        sock.send(request.encode())
+        request = f"{command}|{username}|{password}\n"
+        sock.sendall(request.encode())
         
         response = sock.recv(1024).decode()
         sock.close() 

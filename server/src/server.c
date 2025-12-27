@@ -14,6 +14,16 @@
 
 int listen_sock;
 
+static void *afk_watcher(void *arg)
+{
+    while (1) {
+        sleep(1);
+        gs_tick_afk();
+    }
+    return NULL;
+}
+
+
 static void *client_thread(void *arg)
 {
     int sock = *(int *)arg;
@@ -26,11 +36,25 @@ static void *client_thread(void *arg)
     while (1)
     {
         int n = recv(sock, buf, sizeof(buf) - 1, 0);
+        printf("[RX sock=%d] %s", sock, buf);
+        fflush(stdout);
         if (n <= 0) {
-            printf("[Server] Lost connection: %d → waiting 30 sec for reconnect...\n", sock);
-            gs_handle_disconnect(sock);
-            break;
+            printf("[Server] Disconnect detected sock=%d\n", sock);
+
+            if (gs_player_in_game(sock) && gs_game_alive(sock))
+            {
+                printf("[Server] Lost connection: %d → waiting 30 sec...\n", sock);
+                gs_handle_disconnect(sock);
+                break;   
+            }
+
+            mm_remove_socket(sock);
+            user_set_offline_by_sock(sock);
+            close(sock);
+            return NULL;
         }
+
+
         buf[n] = '\0';
         trim_newline(buf);
 
@@ -83,12 +107,6 @@ static void *client_thread(void *arg)
             continue;
         }
 
-        else if (strcmp(cmd, "BOARD") == 0) {
-            gs_set_board(sock, a); 
-            continue;
-        }
-
-
         else if (strcmp(cmd, "MOVE") == 0 && parts == 3)
         {
             int x = atoi(a);
@@ -96,11 +114,10 @@ static void *client_thread(void *arg)
             gs_handle_move(sock, x, y);
             continue;
         }
-        // FORFEIT: for auto-forfeit. SURRENDER: for surrender
-        else if (strcmp(cmd, "FORFEIT") == 0)
+                else if (strcmp(cmd, "FORFEIT") == 0)
         {
             printf("[Server] %d sent FORFEIT\n", sock);
-            gs_forfeit(sock);                   
+            gs_forfeit(sock);
             continue;
         }
         else if (strcmp(cmd, "SURRENDER") == 0)
@@ -109,7 +126,6 @@ static void *client_thread(void *arg)
             gs_forfeit(sock);
             continue;
         }
-
         else
         {
             send_all(sock, "ERROR|Unknown command\n", 23);
@@ -117,15 +133,6 @@ static void *client_thread(void *arg)
     }
 
     close(sock);
-    return NULL;
-}
-
-static void *afk_watcher(void *arg)
-{
-    while (1) {
-        sleep(1);
-        gs_tick_afk();
-    }
     return NULL;
 }
 
@@ -146,13 +153,9 @@ void server_init(int port)
 
     printf("[Main] Database ready.\n");
     printf("[Server] Listening on port %d...\n", port);
-
     pthread_t afk;
     pthread_create(&afk, NULL, afk_watcher, NULL);
     pthread_detach(afk);
-
-
-    printf("[AFK] Auto-forfeit watcher started (30s)...\n");
 
 }
 
@@ -169,5 +172,3 @@ void server_run()
         pthread_detach(t);
     }
 }
-
-

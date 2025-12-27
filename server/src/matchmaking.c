@@ -178,6 +178,39 @@ static void* mm_worker(void *arg) {
     return NULL;
 }
 
+int mm_player_waiting(int sock) {
+    for (int i = 0; i < q_open_len; i++)
+        if (Q_open[i].sock == sock) return 1;
+    for (int i = 0; i < q_elo_len; i++)
+        if (Q_elo[i].sock == sock) return 1;
+    return 0;
+}
+
+void mm_remove_socket(int sock) {
+    pthread_mutex_lock(&mm_lock);
+
+    // remove from OPEN queue
+    for (int i = 0; i < q_open_len; ) {
+        if (Q_open[i].sock == sock) {
+            remove_at(Q_open, &q_open_len, i);
+        } else {
+            i++;
+        }
+    }
+
+    // remove from ELO queue
+    for (int i = 0; i < q_elo_len; ) {
+        if (Q_elo[i].sock == sock) {
+            remove_at(Q_elo, &q_elo_len, i);
+        } else {
+            i++;
+        }
+    }
+
+    pthread_mutex_unlock(&mm_lock);
+}
+
+
 /* Public: start/stop worker */
 void mm_start_worker(void) {
     pthread_mutex_lock(&mm_lock);
