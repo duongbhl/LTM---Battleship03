@@ -20,6 +20,7 @@ typedef struct
 
     int turn; 
     int alive;
+    time_t turn_started_at;   // thời điểm bắt đầu lượt hiện tại
 
     int dc_sock;            
     time_t dc_expire; 
@@ -159,6 +160,16 @@ static Game *find_game(int sock)
     return NULL;
 }
 
+int gs_get_opponent_sock(int sock)
+{
+    Game *g = find_game(sock);
+    if (!g || !g->alive)
+        return -1;
+
+    return (sock == g->p1) ? g->p2 : g->p1;
+}
+
+
 int gs_player_in_game(int sock)
 {
     return (find_game(sock) != NULL);
@@ -246,6 +257,7 @@ void gs_create_session(int s1, const char *u1, int e1,
 
     g->turn = 1;
     g->alive = 1;
+    g->turn_started_at = time(NULL);
 
     g->dc_sock = 0;
     g->dc_expire = 0;
@@ -395,7 +407,7 @@ void gs_handle_move(int sock, int x, int y)
             sprintf(t, "%d,", cells[i]);
             strcat(list, t);
         }
-        if (count > 0) list[strlen(list) - 1] = 0; // remove trailing comma
+        if (count > 0) list[strlen(list) - 1] = 0;
 
         snprintf(msg, sizeof(msg),
                 "OPPONENT_MOVE|%d|%d|HIT|STATUS=SUNK|%s\n",
@@ -419,11 +431,13 @@ void gs_handle_move(int sock, int x, int y)
     if (!is_hit)
     {
         g->turn = (g->turn == 1 ? 2 : 1);
+        g->turn_started_at = time(NULL);   
         send_logged(sock, "OPPONENT_TURN\n");
         send_logged(enemy_sock, "YOUR_TURN\n");
     }
     else
     {
+        g->turn_started_at = time(NULL); 
         send_logged(sock, "YOUR_TURN\n");
         send_logged(enemy_sock, "OPPONENT_TURN\n");
     }
@@ -462,6 +476,34 @@ void gs_tick_afk(void)
     }
 }
 
+void gs_tick_turn_timeout(void)
+{
+    time_t now = time(NULL);
+
+    for (int i = 0; i < game_count; i++)
+    {
+        Game *g = &games[i];
+        if (!g->alive) continue;
+
+        if (difftime(now, g->turn_started_at) >= 45)
+        {
+            // đổi lượt
+            g->turn = (g->turn == 1 ? 2 : 1);
+            g->turn_started_at = now;
+
+            int cur = (g->turn == 1 ? g->p1 : g->p2);
+            int other = (g->turn == 1 ? g->p2 : g->p1);
+
+            send_logged(cur,   "YOUR_TURN\n");
+            send_logged(other,"OPPONENT_TURN\n");
+
+            send_logged(cur,   "INFO|Opponent timed out. Your turn.\n");
+            send_logged(other,"INFO|You ran out of time. Opponent turn.\n");
+        }
+    }
+}
+
+
 void gs_forfeit(int sock)
 {
     Game *g = find_game(sock);
@@ -477,4 +519,15 @@ void gs_forfeit(int sock)
     g->alive = 0;
     g->dc_sock = 0;
     g->dc_expire = 0;
+}
+
+void gs_send_react(int from_sock, const char *emoji)
+{
+    int opponent = gs_get_opponent_sock(from_sock);
+    if (opponent <= 0)
+        return;
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "OPPONENT_REACT|%s\n", emoji);
+    send_logged(opponent, msg);
 }

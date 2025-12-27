@@ -19,6 +19,7 @@ static void *afk_watcher(void *arg)
     while (1) {
         sleep(1);
         gs_tick_afk();
+        gs_tick_turn_timeout();
     }
     return NULL;
 }
@@ -36,7 +37,6 @@ static void *client_thread(void *arg)
     while (1)
     {
         int n = recv(sock, buf, sizeof(buf) - 1, 0);
-        printf("[RX sock=%d] %s", sock, buf);
         fflush(stdout);
         if (n <= 0) {
             printf("[Server] Disconnect detected sock=%d\n", sock);
@@ -56,6 +56,7 @@ static void *client_thread(void *arg)
 
 
         buf[n] = '\0';
+        printf("[RX sock=%d] %s", sock, buf);
         trim_newline(buf);
 
         // --- PARSE CHUẨN ---
@@ -124,6 +125,24 @@ static void *client_thread(void *arg)
         {
             printf("[Server] %d sent SURRENDER\n", sock);
             gs_forfeit(sock);
+            continue;
+        }
+
+        else if (strcmp(cmd, "REACT") == 0 && parts >= 2)
+        {
+            // a = emoji
+            gs_send_react(sock, a);
+            continue;
+        }
+
+        else if (strcmp(cmd, "GET_ONLINE") == 0)
+        {
+            char list[512];
+            char msg[600];
+
+            user_get_all(list, sizeof(list));
+            snprintf(msg, sizeof(msg), "ONLINE_LIST|%s\n", list);
+            send_logged(sock, msg);
             continue;
         }
         else

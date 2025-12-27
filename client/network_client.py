@@ -4,8 +4,9 @@ import threading
 import queue
 
 class NetworkClient:
-    def __init__(self, host="10.242.244.3", port=5050): 
+    def __init__(self, host="127.0.0.1", port=5050): 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock.connect((host, port))
         self.sock_lock = threading.Lock()
         self.recv_queue = queue.Queue()
@@ -13,12 +14,16 @@ class NetworkClient:
         self.on_disconnect = None                         
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
+        self.sock.setblocking(True)
 
     def _recv_loop(self):
         buffer = ""
         try:
             while self.alive:
-                data = self.sock.recv(4096)
+                try:
+                    data = self.sock.recv(4096)
+                except socket.timeout:
+                    continue
                 if not data:
                     self.alive = False
                     if self.on_disconnect:
@@ -43,7 +48,7 @@ class NetworkClient:
         with self.sock_lock:
             try:
                 self.sock.sendall(data)
-            except OSError:
+            except OSError as e:
                 print("[NET] send error:", e)
                 self.alive = False
 
@@ -60,3 +65,25 @@ class NetworkClient:
             self.sock.close()
         except OSError:
             pass
+
+    @classmethod
+    def from_socket(cls, sock):
+        obj = cls.__new__(cls)
+
+        obj.sock = sock
+        obj.sock.settimeout(None)
+        obj.sock.setblocking(True)
+        obj.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+        obj.sock_lock = threading.Lock()
+        obj.recv_queue = queue.Queue()
+        obj.alive = True
+        obj.on_disconnect = None
+        obj._recv_thread = threading.Thread(
+            target=obj._recv_loop,
+            daemon=True
+        )
+        obj._recv_thread.start()
+
+        return obj
+
