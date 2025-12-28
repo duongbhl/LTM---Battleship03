@@ -160,7 +160,7 @@ def render_scrolled(font, text, max_width, color):
     return surf
 
 
-def run_online_game(net, username, mode):
+def run_online_game(net, username, mode, send_find_match: bool = True):
     my_elo = "?"
     opponent_elo = "?"
 
@@ -168,8 +168,12 @@ def run_online_game(net, username, mode):
     message = "Waiting for opponent..."
     message_color = TEXT
 
-    net.send(f"FIND_MATCH|{username}|{mode}")
-    queue_started_at = pygame.time.get_ticks()
+    # Normal matchmaking flow: client asks server to find a match.
+    # Some flows (e.g. friend challenge accepted) already have a session created
+    # on the server; in that case we only wait for MATCH_FOUND.
+    if send_find_match:
+        net.send(f"FIND_MATCH|{username}|{mode}")
+    # queue_started_at is managed by QUEUED / MATCH_FOUND messages below
 
 
     opponent = "???"

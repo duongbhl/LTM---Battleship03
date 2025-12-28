@@ -209,6 +209,35 @@ static void *client_thread(void *arg)
             continue;
         }
 
+        /* ===== Direct ELO challenge between friends ===== */
+        else if (strcmp(cmd, "CHALLENGE_ELO") == 0 && parts == 3)
+        {
+            // a = from, b = to
+            handle_challenge_elo(sock, a, b);
+            continue;
+        }
+
+        else if (strcmp(cmd, "CHALLENGE_ACCEPT") == 0 && parts == 3)
+        {
+            // a = me, b = other (challenger)
+            handle_challenge_accept(sock, a, b);
+            continue;
+        }
+
+        else if (strcmp(cmd, "CHALLENGE_DECLINE") == 0 && parts == 3)
+        {
+            // a = me, b = other (challenger)
+            handle_challenge_decline(sock, a, b);
+            continue;
+        }
+
+        else if (strcmp(cmd, "CHALLENGE_CANCEL") == 0 && parts == 3)
+        {
+            // a = from, b = to
+            handle_challenge_cancel(sock, a, b);
+            continue;
+        }
+
         else if (strcmp(cmd, "GET_ONLINE") == 0)
         {
             char list[512];
