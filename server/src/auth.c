@@ -52,3 +52,15 @@ void handle_register(int sock, const char *user, const char *pass)
         send_logged(sock, msg);
     }
 }
+
+
+void handle_logout(int sock, const char *user)
+{
+    if (user && user[0] != '\0') {
+        user_set_offline_by_sock(sock);
+        printf("[LOGOUT] %s logged out\n", user);
+    }
+
+    send_logged(sock, "LOGOUT_OK|\n");
+    close(sock);
+}
