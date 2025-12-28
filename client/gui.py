@@ -47,9 +47,15 @@ def render_scrolled(font, text, max_width, color):
 
 
 # GLOBAL SESSION MANAGEMENT
-current_user = None
+current_user = None 
 current_password = None  # giữ password tạm trong session để login socket gameplay
 is_logged_in = False
+session_sock = None
+
+online_users = []
+online_popup_open = False
+last_online_fetch = 0
+
 
 
 
@@ -88,7 +94,7 @@ def launch_game(mode):
     print("DEBUG: current_user =", current_user)    # PRINT 3
     print("DEBUG: current_pass =", current_password)    # PRINT 3
 
-    run_online_game(current_user, current_password, mode)
+    run_online_game(session_sock, current_user, mode)
     print("DEBUG: returned from run_online_game")   # PRINT 4
 
 
@@ -100,19 +106,21 @@ def send_auth_request(command, username, password):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5)
-        sock.connect((os.getenv('IP_PUBLIC'), 5050))
-        # sock.connect(('127.0.0.1', 5050))  
+        sock.connect(("127.0.0.1", 5050)) 
         
         request = f"{command}|{username}|{password}\n"
         sock.sendall(request.encode())
-        
+
         response = sock.recv(1024).decode()
-        sock.close() 
+
+
         
         if "|" in response:
             status, message = response.split("|", 1)
             if status == "LOGIN_OK":
-                return True, "Login successful!"
+                sock.settimeout(None) 
+                sock.setblocking(True)
+                return True, sock
             elif status == "REGISTER_SUCCESS":
                 return True, message
             else:  # ERROR
@@ -130,7 +138,7 @@ def send_auth_request(command, username, password):
 
 def login_screen():
     """Màn hình đăng nhập"""
-    global current_user,current_password,is_logged_in
+    global current_user,current_password,is_logged_in, session_sock
 
     # register inputs
     input_w = int(MENU_WIDTH * 0.40)
@@ -225,8 +233,9 @@ def login_screen():
                             message_color = TEXT_COLOR
                             pygame.display.flip()
 
-                            success, msg = send_auth_request("LOGIN", username, password)
+                            success, result = send_auth_request("LOGIN", username, password)
                             if success:
+                                session_sock = NetworkClient.from_socket(result)  
                                 current_user = username
                                 current_password = password
                                 is_logged_in = True
@@ -237,7 +246,7 @@ def login_screen():
                                 pygame.time.wait(1500)
                                 return True
                             else:
-                                message = msg
+                                message = result
                                 message_color = ERROR_COLOR
                     else:
                         if event.unicode and event.unicode.isprintable():
@@ -261,8 +270,9 @@ def login_screen():
                         message_color = TEXT_COLOR
                         pygame.display.flip()
 
-                        success, msg = send_auth_request("LOGIN", username, password)
+                        success, result = send_auth_request("LOGIN", username, password)
                         if success:
+                            session_sock = NetworkClient.from_socket(result)
                             current_user = username
                             current_password = password
                             is_logged_in = True
@@ -273,7 +283,7 @@ def login_screen():
                             pygame.time.wait(1500)
                             return True
                         else:
-                            message = msg
+                            message = result
                             message_color = ERROR_COLOR
 
                 if btn_register.is_clicked(event):
@@ -631,7 +641,8 @@ def pre_login_menu():
 
 def main_menu():
     """Menu chính sau khi đăng nhập: PvP Online + Logout + Exit"""
-    global current_user, is_logged_in
+    global current_user, is_logged_in, session_sock
+    global online_users, online_popup_open, last_online_fetch
     
     button_width = int(MENU_WIDTH * 0.45)
     button_height = int(MENU_HEIGHT * 0.09)
@@ -664,12 +675,58 @@ def main_menu():
         )
     }
 
+    # --- ONLINE USERS BUTTON (GREEN) ---
+    online_button = Button(
+        rect=(MENU_WIDTH - 220, 20, 200, 44),
+        text="Online: 0",
+        color=(60, 160, 90),        # xanh
+        hover_color=(90, 190, 120)  # xanh sáng khi hover
+    )
+
+
     clock = pygame.time.Clock()
     running = True
 
     while running:
         SCREEN.fill(BG_COLOR)
+        if session_sock:
+            msg = session_sock.read_nowait()
+            while msg:
+                if msg.startswith("ONLINE_LIST|"):
+                    users = msg.split("|", 1)[1].strip()
+                    online_users = users.split(",") if users else []
+                    online_button.text = f"Online: {len(online_users)}"
+                else:
+                    session_sock.recv_queue.put(msg)
+                    break   
+                msg = session_sock.read_nowait()
+
+        # --- ONLINE INDICATOR ---
+        online_x = MENU_WIDTH - 40
+        online_y = 40
+        pygame.draw.circle(SCREEN, (0, 220, 0), (online_x, online_y), 10)
+
+        count_text = font_small.render(str(len(online_users)), True, (255,255,255))
+        SCREEN.blit(count_text, count_text.get_rect(center=(online_x, online_y)))
+
+        if online_popup_open:
+            box_w, box_h = 300, 200
+            box_x = MENU_WIDTH - box_w - 20
+            box_y = 80
+
+            pygame.draw.rect(SCREEN, (40,50,70), (box_x, box_y, box_w, box_h), border_radius=10)
+            pygame.draw.rect(SCREEN, (120,150,200), (box_x, box_y, box_w, box_h), 2, border_radius=10)
+
+            title = font_small.render("Online Players", True, (200,200,255))
+            SCREEN.blit(title, (box_x + 10, box_y + 10))
+
+            for i, u in enumerate(online_users[:8]):
+                txt = font_small.render(f"{u}", True, (180,255,180))
+                SCREEN.blit(txt, (box_x + 15, box_y + 40 + i*22))
+
+
         mouse_pos = pygame.mouse.get_pos()
+        online_button.is_hovered(mouse_pos)
 
         # Title
         title_surf = font_title.render("BATTLESHIP", True, TITLE_COLOR)
@@ -692,11 +749,18 @@ def main_menu():
                 current_user = None
                 is_logged_in = False
                 return
+            
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if online_button.is_clicked(event):
+                    online_popup_open = not online_popup_open
+
+
 
             for key, btn in buttons.items():
                 if btn.is_clicked(event):
                     if key == "pvp_open":
                         launch_game('open')
+                        return
                     elif key == "pvp_rank":
                         launch_game('rank')
                     elif key == "logout":
@@ -706,6 +770,10 @@ def main_menu():
                         SCREEN.blit(logout_surf, logout_surf.get_rect(center=(MENU_WIDTH//2, MENU_HEIGHT//2)))
                         pygame.display.flip()
                         pygame.time.wait(1000)
+
+                        if session_sock:
+                            session_sock.close()
+                            session_sock = None
                         
                         current_user = None
                         is_logged_in = False
@@ -722,6 +790,16 @@ def main_menu():
         hint_surf = font_small.render("Press ESC to logout", True, (150, 150, 170))
         SCREEN.blit(hint_surf, hint_surf.get_rect(center=(MENU_WIDTH//2, MENU_HEIGHT - 50)))
 
+        now = time.time()
+        if session_sock and now - last_online_fetch > 3:
+            session_sock.send("GET_ONLINE")
+
+            last_online_fetch = now
+
+
+
+
+        online_button.draw(SCREEN)
         pygame.display.flip()
         clock.tick(60)
 

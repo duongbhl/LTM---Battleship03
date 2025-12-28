@@ -49,3 +49,20 @@ const char *user_of_sock(int sock)
 
     return NULL;
 }
+
+int user_online_count(void)
+{
+    return count;
+}
+
+void user_get_all(char *out, int maxlen)
+{
+    out[0] = '\0';
+    for (int i = 0; i < count; i++) {
+        strncat(out, list[i].username, maxlen - strlen(out) - 1);
+        if (i != count - 1)
+            strncat(out, ",", maxlen - strlen(out) - 1);
+    }
+}
+
+

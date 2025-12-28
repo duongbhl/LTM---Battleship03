@@ -14,7 +14,7 @@ SRCS = $(SRC_DIR)/main.c \
        $(SRC_DIR)/matchmaking.c \
        $(SRC_DIR)/elo.c \
        $(SRC_DIR)/afk.c \
-       $(SRC_DIR)/online_users.c \
+       $(SRC_DIR)/online_users.c
 
 OBJS = $(SRCS:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
 
