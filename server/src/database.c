@@ -148,6 +148,23 @@ int db_login_user(const char *user, const char *pass, int *out_elo, char *errbuf
     return -1;
 }
 
+int db_user_exists(const char *username) {
+    sqlite3_stmt *stmt;
+    const char *sql = "SELECT 1 FROM users WHERE username = ? LIMIT 1";
+
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return 0;
+    }
+
+    sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
+
+    int exists = (sqlite3_step(stmt) == SQLITE_ROW);
+
+    sqlite3_finalize(stmt);
+    return exists;
+}
+
+
 int db_get_elo(const char *username)
 {
     sqlite3_stmt *stmt;
@@ -287,15 +304,19 @@ void db_insert_friend_request(const char *from, const char *to)
 {
     sqlite3_stmt *stmt;
     const char *sql =
-        "INSERT OR IGNORE INTO friends(user, friend, status) "
-        "VALUES(?, ?, 'PENDING')";
+        "INSERT OR REPLACE INTO friends (user, friend, status) "
+        "VALUES (?, ?, 'pending')";
 
-    sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL);
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+        return;
+
     sqlite3_bind_text(stmt, 1, from, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, to, -1, SQLITE_STATIC);
+
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 }
+
 
 void db_accept_friend(const char *from, const char *to)
 {
@@ -341,19 +362,55 @@ int db_get_accepted_friends(const char *user, char out[][32], int max)
 {
     sqlite3_stmt *stmt;
     const char *sql =
-        "SELECT friend FROM friends "
-        "WHERE user=? AND status='ACCEPTED'";
+        "SELECT friend AS name FROM friends "
+        "WHERE user=? AND status='ACCEPTED' "
+        "UNION "
+        "SELECT user AS name FROM friends "
+        "WHERE friend=? AND status='ACCEPTED'";
 
-    sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL);
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+        return 0;
+
     sqlite3_bind_text(stmt, 1, user, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, user, -1, SQLITE_STATIC);
 
     int count = 0;
     while (sqlite3_step(stmt) == SQLITE_ROW && count < max)
     {
-        const char *f = (const char *)sqlite3_column_text(stmt, 0);
-        strncpy(out[count++], f, 31);
+        const char *name = (const char *)sqlite3_column_text(stmt, 0);
+        if (name) {
+            strncpy(out[count], name, 31);
+            out[count][31] = '\0';
+            count++;
+        }
     }
 
     sqlite3_finalize(stmt);
     return count;
 }
+
+
+int db_get_pending_invites(const char *to_user, char out[][32], int max)
+{
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "SELECT user FROM friends WHERE friend=? AND status='pending'";
+
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return 0;
+    }
+    sqlite3_bind_text(stmt, 1, to_user, -1, SQLITE_STATIC);
+
+    int n = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && n < max) {
+        const unsigned char *u = sqlite3_column_text(stmt, 0);
+        if (u) {
+            strncpy(out[n], (const char*)u, 31);
+            out[n][31] = '\0';
+            n++;
+        }
+    }
+    sqlite3_finalize(stmt);
+    return n;
+}
+

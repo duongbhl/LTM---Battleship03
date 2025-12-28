@@ -28,6 +28,7 @@ SUCCESS_COLOR = (100, 255, 100)
 ERROR_COLOR = (255, 100, 100)
 LOGOUT_BUTTON_COLOR = (180, 130, 70)
 LOGOUT_BUTTON_HOVER_COLOR = (210, 160, 100)
+WHITE = (255, 255, 255)
 
 # Font sizes
 title_font_size = int(MENU_HEIGHT * 0.08)
@@ -56,6 +57,27 @@ online_users = []
 online_popup_open = False
 last_online_fetch = 0
 
+# ----- FRIEND SYSTEM STATE -----
+friend_invites = []   # list[str]  user gửi lời mời
+friend_popup_open = False
+
+# ----- FRIEND SEARCH STATE -----
+friend_search_text = ""
+friend_search_active = False
+
+# ----- FRIEND NOTIFY -----
+friend_notify = None        # str
+friend_notify_time = 0      # timestamp
+FRIEND_NOTIFY_DURATION = 3  # seconds
+
+# ----- FRIEND NOTIFICATION ICON -----
+friend_notify_icon_flash = False
+
+# ----- SEARCH STATUS MESSAGE -----
+search_status_text = None
+search_status_color = None
+search_status_time = 0
+SEARCH_STATUS_DURATION = 3
 
 
 
@@ -645,6 +667,158 @@ def show_history(username):
     net.close()
 
 
+def friend_notifications_screen():
+    global current_screen, friend_invites, session_sock
+
+    clock = pygame.time.Clock()
+    running = True
+
+    # back button
+    back_btn = Button(
+        (30, MENU_HEIGHT - 80, 140, 44),
+        "Back",
+        color=(120, 120, 140),
+        hover_color=(160, 160, 180)
+    )
+
+    while running:
+        SCREEN.fill(BG_COLOR)
+        mouse_pos = pygame.mouse.get_pos()
+
+        # Title
+        title = font_title.render("Friend Requests", True, TITLE_COLOR)
+        SCREEN.blit(title, title.get_rect(center=(MENU_WIDTH // 2, 80)))
+
+        # Content box
+        box_w, box_h = 520, 360
+        box_x = (MENU_WIDTH - box_w) // 2
+        box_y = 140
+
+        pygame.draw.rect(
+            SCREEN, (40, 50, 70),
+            (box_x, box_y, box_w, box_h),
+            border_radius=14
+        )
+        pygame.draw.rect(
+            SCREEN, (120, 150, 200),
+            (box_x, box_y, box_w, box_h),
+            2, border_radius=14
+        )
+
+        if not friend_invites:
+            empty = font_small.render(
+                "No pending friend requests",
+                True, (160, 160, 180)
+            )
+            SCREEN.blit(
+                empty,
+                empty.get_rect(center=(MENU_WIDTH // 2, box_y + box_h // 2))
+            )
+        else:
+            for i, sender in enumerate(friend_invites[:4]):
+                y = box_y + 30 + i * 70
+
+                txt = font_small.render(
+                    f"{sender} wants to be your friend",
+                    True, (200, 255, 200)
+                )
+                SCREEN.blit(txt, (box_x + 30, y))
+
+                accept = Button(
+                    (box_x + box_w - 260, y + 26, 100, 36),
+                    "Accept",
+                    color=(70, 160, 90),
+                    hover_color=(100, 190, 120)
+                )
+                reject = Button(
+                    (box_x + box_w - 140, y + 26, 100, 36),
+                    "Reject",
+                    color=(180, 80, 80),
+                    hover_color=(220, 110, 110)
+                )
+
+                accept.is_hovered(mouse_pos)
+                reject.is_hovered(mouse_pos)
+                accept.draw(SCREEN)
+                reject.draw(SCREEN)
+
+                for event in pygame.event.get(pygame.MOUSEBUTTONDOWN):
+                    if accept.is_clicked(event):
+                        session_sock.send(
+                            f"FRIEND_ACCEPT|{current_user}|{sender}"
+                        )
+                        friend_invites.remove(sender)
+                        break
+
+                    if reject.is_clicked(event):
+                        session_sock.send(
+                            f"FRIEND_REJECT|{current_user}|{sender}"
+                        )
+                        friend_invites.remove(sender)
+                        break
+
+        # Back button
+        back_btn.is_hovered(mouse_pos)
+        back_btn.draw(SCREEN)
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                exit()
+
+            if back_btn.is_clicked(event):
+                current_screen = "main"
+                return
+
+        pygame.display.flip()
+        clock.tick(60)
+
+def friends_online_screen():
+    global online_users
+    clock = pygame.time.Clock()
+
+    back_btn = Button((30, MENU_HEIGHT - 80, 140, 44), "Back",
+                      color=(120, 120, 140), hover_color=(160, 160, 180))
+
+    running = True
+    while running:
+        SCREEN.fill(BG_COLOR)
+        mouse_pos = pygame.mouse.get_pos()
+
+        title = font_title.render("FRIENDS ONLINE", True, TITLE_COLOR)
+        SCREEN.blit(title, title.get_rect(center=(MENU_WIDTH // 2, 80)))
+
+        box_w, box_h = 520, 460
+        box_x = (MENU_WIDTH - box_w) // 2
+        box_y = 140
+
+        pygame.draw.rect(SCREEN, (40, 50, 70), (box_x, box_y, box_w, box_h), border_radius=14)
+        pygame.draw.rect(SCREEN, (120, 150, 200), (box_x, box_y, box_w, box_h), 2, border_radius=14)
+
+        if not online_users:
+            empty = font_small.render("No friends online", True, (160, 160, 180))
+            SCREEN.blit(empty, empty.get_rect(center=(MENU_WIDTH // 2, box_y + box_h // 2)))
+        else:
+            y = box_y + 30
+            for u in online_users[:10]:
+                line = font_small.render("🟢 " + u, True, (200, 255, 200))
+                SCREEN.blit(line, (box_x + 30, y))
+                y += 40
+
+        back_btn.is_hovered(mouse_pos)
+        back_btn.draw(SCREEN)
+
+        for ev in pygame.event.get():
+            if ev.type == pygame.QUIT:
+                pygame.quit(); exit()
+            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+                running = False
+            if back_btn.is_clicked(ev):
+                running = False
+
+        pygame.display.flip()
+        clock.tick(60)
+
 
 def pre_login_menu():
     """Menu trước khi đăng nhập: Login/Register + Exit"""
@@ -712,10 +886,13 @@ def pre_login_menu():
 
 
 def main_menu():
-    """Menu chính sau khi đăng nhập: PvP Online + Logout + Exit"""
     global current_user, is_logged_in, session_sock
     global online_users, online_popup_open, last_online_fetch
-    
+    global friend_invites
+    global friend_search_text, friend_search_active
+    global friend_notify, friend_notify_time
+    global search_status_text, search_status_color, search_status_time
+
     button_width = int(MENU_WIDTH * 0.45)
     button_height = int(MENU_HEIGHT * 0.09)
     spacing = int(MENU_HEIGHT * 0.03)
@@ -729,160 +906,244 @@ def main_menu():
             "PvP - Ranked (ELO)"
         ),
         "pvp_open": Button(
-            ((MENU_WIDTH - button_width) // 2, start_y + (button_height + spacing), button_width, button_height),
-            "PvP - Open Rank"
+            ((MENU_WIDTH - button_width) // 2,
+             start_y + (button_height + spacing),
+             button_width, button_height),
+            "PvP - Open"
         ),
-        "history": Button(
-            ((MENU_WIDTH - button_width)//2, start_y + (button_height + spacing)*4, button_width, button_height),
-            "Match History"
-        ),
-
         "logout": Button(
-            ((MENU_WIDTH - button_width) // 2, start_y + (button_height + spacing)*2, button_width, button_height),
+            ((MENU_WIDTH - button_width) // 2,
+             start_y + (button_height + spacing) * 2,
+             button_width, button_height),
             "Logout",
             color=LOGOUT_BUTTON_COLOR,
             hover_color=LOGOUT_BUTTON_HOVER_COLOR
         ),
         "exit": Button(
-            ((MENU_WIDTH - button_width) // 2, start_y + (button_height + spacing) * 3, button_width, button_height),
+            ((MENU_WIDTH - button_width) // 2,
+             start_y + (button_height + spacing) * 3,
+             button_width, button_height),
             "Exit Game",
             color=EXIT_BUTTON_COLOR,
             hover_color=EXIT_BUTTON_HOVER_COLOR
-        )
+        ),
+        "history": Button(
+            ((MENU_WIDTH - button_width) // 2,
+             start_y + (button_height + spacing) * 4,
+             button_width, button_height),
+            "Match History"
+        ),
     }
 
-    # --- ONLINE USERS BUTTON (GREEN) ---
     online_button = Button(
-        rect=(MENU_WIDTH - 220, 20, 200, 44),
-        text="Online: 0",
-        color=(60, 160, 90),        # xanh
-        hover_color=(90, 190, 120)  # xanh sáng khi hover
+        rect=(MENU_WIDTH - 240, 20, 220, 44),
+        text="Friends Online: 0",
+        color=(60, 160, 90),
+        hover_color=(90, 190, 120)
     )
 
+    notify_rect = pygame.Rect(20, 20, 44, 44)
 
     clock = pygame.time.Clock()
     running = True
+    user_rects = []
 
     while running:
         SCREEN.fill(BG_COLOR)
+        mouse_pos = pygame.mouse.get_pos()
+
+        # ================= SOCKET RECEIVE =================
         if session_sock:
             msg = session_sock.read_nowait()
             while msg:
-                if msg.startswith("ONLINE_LIST|"):
-                    users = msg.split("|", 1)[1].strip()
+                if msg.startswith("FRIENDS_ONLINE|"):
+                    users = msg.split("|", 1)[1].strip(",")
                     online_users = users.split(",") if users else []
-                    online_button.text = f"Online: {len(online_users)}"
+                    online_button.text = f"Friends Online: {len(online_users)}"
+
+                elif msg.startswith("FRIEND_INVITES|"):
+                    users = msg.split("|", 1)[1].strip(",")
+                    batch = users.split(",") if users else []
+                    for sender in batch:
+                        if sender and sender not in friend_invites:
+                            friend_invites.append(sender)
+
+                elif msg.startswith("FRIEND_ACCEPTED|"):
+                    user = msg.split("|", 1)[1]
+                    friend_notify = f"{user} accepted your friend request"
+                    friend_notify_time = time.time()
+
+                elif msg.startswith("FRIEND_REJECTED|"):
+                    user = msg.split("|", 1)[1]
+                    friend_notify = f"{user} rejected your friend request"
+                    friend_notify_time = time.time()
+
+                elif msg.startswith("FRIEND_SENT|"):
+                    target = msg.split("|", 1)[1]
+                    search_status_text = f"Friend invited: {target}"
+                    search_status_color = (120, 255, 120)
+                    search_status_time = time.time()
+
+                elif msg.startswith("ERROR|"):
+                    search_status_text = msg.split("|", 1)[1]
+                    search_status_color = (255, 120, 120)
+                    search_status_time = time.time()
+
                 else:
                     session_sock.recv_queue.put(msg)
-                    break   
+                    break
+
                 msg = session_sock.read_nowait()
 
-        # --- ONLINE INDICATOR ---
-        online_x = MENU_WIDTH - 40
-        online_y = 40
-        pygame.draw.circle(SCREEN, (0, 220, 0), (online_x, online_y), 10)
+        # ================= TITLE =================
+        title = font_title.render("BATTLESHIP", True, TITLE_COLOR)
+        SCREEN.blit(title, title.get_rect(center=(MENU_WIDTH // 2, title_y_pos)))
 
-        count_text = font_small.render(str(len(online_users)), True, (255,255,255))
-        SCREEN.blit(count_text, count_text.get_rect(center=(online_x, online_y)))
+        status = font_small.render(
+            f"Logged in as: {current_user}", True, SUCCESS_COLOR
+        )
+        SCREEN.blit(
+            status,
+            status.get_rect(center=(MENU_WIDTH // 2, title_y_pos + 60))
+        )
 
-        if online_popup_open:
-            box_w, box_h = 300, 200
-            box_x = MENU_WIDTH - box_w - 20
-            box_y = 80
-
-            pygame.draw.rect(SCREEN, (40,50,70), (box_x, box_y, box_w, box_h), border_radius=10)
-            pygame.draw.rect(SCREEN, (120,150,200), (box_x, box_y, box_w, box_h), 2, border_radius=10)
-
-            title = font_small.render("Online Players", True, (200,200,255))
-            SCREEN.blit(title, (box_x + 10, box_y + 10))
-
-            for i, u in enumerate(online_users[:8]):
-                txt = font_small.render(f"{u}", True, (180,255,180))
-                SCREEN.blit(txt, (box_x + 15, box_y + 40 + i*22))
+        # ================= NOTIFICATION ICON =================
+        icon_color = (220, 200, 80) if friend_invites else (120, 120, 140)
+        pygame.draw.circle(SCREEN, icon_color, notify_rect.center, 20)
+        cx, cy = notify_rect.center
+        pygame.draw.rect(SCREEN, (30, 30, 30), (cx - 7, cy - 5, 14, 14), border_radius=4)
+        pygame.draw.circle(SCREEN, (30, 30, 30), (cx, cy + 9), 3)
+        
 
 
-        mouse_pos = pygame.mouse.get_pos()
-        online_button.is_hovered(mouse_pos)
+        
+        if friend_invites:
+            badge_x = notify_rect.right - 6
+            badge_y = notify_rect.top + 6
+            pygame.draw.circle(SCREEN, (220, 60, 60), (badge_x, badge_y), 10)
+            num = font_small.render(str(len(friend_invites)), True, WHITE)
+            SCREEN.blit(num, num.get_rect(center=(badge_x, badge_y)))
 
-        # Title
-        title_surf = font_title.render("BATTLESHIP", True, TITLE_COLOR)
-        title_rect = title_surf.get_rect(center=(MENU_WIDTH // 2, title_y_pos))
-        SCREEN.blit(title_surf, title_rect)
+        # ================= FRIEND SEARCH =================
+        search_w, search_h = 260, 38
+        search_x = MENU_WIDTH - search_w - 20
+        search_y = 70
 
-        # User status
-        status_text = f"Logged in as: {current_user}"
-        status_surf = font_small.render(status_text, True, SUCCESS_COLOR)
-        status_rect = status_surf.get_rect(center=(MENU_WIDTH // 2, title_y_pos + 60))
-        SCREEN.blit(status_surf, status_rect)
+        input_rect = pygame.Rect(search_x, search_y, search_w - 60, search_h)
+        send_rect = pygame.Rect(search_x + search_w - 52, search_y, 52, search_h)
 
+        pygame.draw.rect(
+            SCREEN,
+            (50, 60, 80) if friend_search_active else (40, 50, 70),
+            input_rect,
+            border_radius=8
+        )
+        pygame.draw.rect(SCREEN, (120, 150, 200), input_rect, 2, border_radius=8)
+
+        display = friend_search_text or "Search player..."
+        color = TEXT_COLOR if friend_search_text else (150, 150, 170)
+        txt = font_small.render(display, True, color)
+        SCREEN.blit(txt, (input_rect.x + 8, input_rect.y + 8))
+
+        pygame.draw.rect(SCREEN, (70, 160, 90), send_rect, border_radius=8)
+        send_txt = font_small.render("Send", True, WHITE)
+        SCREEN.blit(send_txt, send_txt.get_rect(center=send_rect.center))
+
+        if search_status_text and time.time() - search_status_time < SEARCH_STATUS_DURATION:
+            st = font_small.render(search_status_text, True, search_status_color)
+            SCREEN.blit(st, (input_rect.x, input_rect.y + input_rect.height + 6))
+
+        
+
+        # ================= EVENTS =================
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 exit()
 
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                # ESC để logout và về pre-login menu
-                current_user = None
-                is_logged_in = False
-                return
-            
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    current_user = None
+                    is_logged_in = False
+                    return
+
+                if friend_search_active:
+                    if event.key == pygame.K_BACKSPACE:
+                        friend_search_text = friend_search_text[:-1]
+                    elif event.key == pygame.K_RETURN:
+                        if friend_search_text.strip():
+                            session_sock.send(
+                                f"FRIEND_REQUEST|{current_user}|{friend_search_text.strip()}"
+                            )
+                            search_status_text = "Sending invite..."
+                            search_status_color = (200, 200, 255)
+                            search_status_time = time.time()
+
+                        friend_search_text = ""
+                        friend_search_active = False
+                    else:
+                        if len(friend_search_text) < 20 and event.unicode.isprintable():
+                            friend_search_text += event.unicode
+
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if online_button.is_clicked(event):
-                    online_popup_open = not online_popup_open
+                
+                if input_rect.collidepoint(event.pos):
+                    friend_search_active = True
+                else:
+                    friend_search_active = False
+
+                if send_rect.collidepoint(event.pos):
+                    if friend_search_text.strip():
+                        session_sock.send(
+                            f"FRIEND_REQUEST|{current_user}|{friend_search_text.strip()}"
+                        )
+                        search_status_text = "Friend invited"
+                        search_status_color = (120, 255, 120)
+                        search_status_time = time.time()
+                        friend_search_text = ""
+                        friend_search_active = False
+                if notify_rect.collidepoint(event.pos):
+                    friend_notifications_screen()
+                if online_button.rect.collidepoint(event.pos):
+                    friends_online_screen()
 
 
-
-            for key, btn in buttons.items():
-                if btn.is_clicked(event):
-                    if key == "pvp_open":
-                        launch_game('open')
-                    elif key == "pvp_rank":
-                        launch_game('rank')
-                    elif key == "logout":
-                        # Logout animation
-                        SCREEN.fill(BG_COLOR)
-                        logout_surf = font_title.render("Logged out successfully!", True, SUCCESS_COLOR)
-                        SCREEN.blit(logout_surf, logout_surf.get_rect(center=(MENU_WIDTH//2, MENU_HEIGHT//2)))
-                        pygame.display.flip()
-                        pygame.time.wait(1000)
-
-                        if session_sock:
-                            try:
-                                session_sock.send(f"LOGOUT|{current_user}")
-                                
-                            except:
-                                pass
-                            session_sock.close()
-                            session_sock = None
-                        
-                        current_user = None
-                        is_logged_in = False
-                        return  # Quay về pre-login menu
-                    elif key == "history":
-                        show_history(current_user)
-
-                    elif key == "exit":
-                        pygame.quit()
-                        exit()
+                for key, btn in buttons.items():
+                    if btn.is_clicked(event):
+                        if key == "pvp_rank":
+                            launch_game("rank")
+                        elif key == "pvp_open":
+                            launch_game("open")
+                        elif key == "history":
+                            show_history(current_user)
+                        elif key == "logout":
+                            if session_sock:
+                                try:
+                                    session_sock.send(f"LOGOUT|{current_user}")
+                                except:
+                                    pass
+                                session_sock.close()
+                                session_sock = None
+                            current_user = None
+                            is_logged_in = False
+                            return
+                        elif key == "exit":
+                            pygame.quit()
+                            exit()
 
         for btn in buttons.values():
             btn.is_hovered(mouse_pos)
             btn.draw(SCREEN)
 
-        # Hint
-        hint_surf = font_small.render("Press ESC to logout", True, (150, 150, 170))
-        SCREEN.blit(hint_surf, hint_surf.get_rect(center=(MENU_WIDTH//2, MENU_HEIGHT - 50)))
+        online_button.is_hovered(mouse_pos)
+        online_button.draw(SCREEN)
+
 
         now = time.time()
         if session_sock and now - last_online_fetch > 3:
-            session_sock.send("GET_ONLINE")
-
+            session_sock.send(f"GET_FRIENDS_ONLINE|{current_user}")
             last_online_fetch = now
 
-
-
-
-        online_button.draw(SCREEN)
         pygame.display.flip()
         clock.tick(60)
 

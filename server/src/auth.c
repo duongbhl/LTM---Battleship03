@@ -28,6 +28,7 @@ void handle_login(int sock, const char *user, const char *pass)
         char msg[128];
         snprintf(msg, sizeof(msg), "LOGIN_OK|%d\n", elo);
         send_logged(sock, msg);
+        push_pending_invites(sock, user);
     }
     else
     {
@@ -64,3 +65,23 @@ void handle_logout(int sock, const char *user)
     send_logged(sock, "LOGOUT_OK|\n");
     close(sock);
 }
+
+
+void push_pending_invites(int sock, const char *user)
+{
+    char senders[64][32];
+    int n = db_get_pending_invites(user, senders, 64);
+
+    char buf[2048];
+    buf[0] = '\0';
+
+    for (int i = 0; i < n; i++) {
+        strcat(buf, senders[i]);
+        if (i < n - 1) strcat(buf, ",");
+    }
+
+    char msg[2100];
+    snprintf(msg, sizeof(msg), "FRIEND_INVITES|%s\n", buf);
+    send_logged(sock, msg);
+}
+

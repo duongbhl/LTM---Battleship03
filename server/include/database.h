@@ -15,6 +15,9 @@ int db_register_user(const char* user, const char* pass,char* errbuf, size_t err
 
 int db_login_user(const char* user, const char* pass,int* out_elo,char* errbuf, size_t errsz);
 
+int db_user_exists(const char *username);
+
+
 // ELO MANAGEMENT
 int db_get_elo(const char *username);
 
@@ -36,6 +39,8 @@ void db_accept_friend(const char *from, const char *to);
 void db_delete_friend(const char *user, const char *friend);
 
 int db_get_accepted_friends(const char *user, char out[][32], int max);
+
+int db_get_pending_invites(const char *to_user, char out[][32], int max);
 
 
 #endif
