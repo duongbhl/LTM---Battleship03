@@ -401,16 +401,6 @@ def run_online_game(net, username, mode):
                     if len(chat_input) < 80:
                         chat_input += ev.unicode
 
-
-            elif ev.type == pygame.KEYDOWN and phase == "playing":
-                if ev.key == pygame.K_1:
-                    net.send("REACT|😂")
-                elif ev.key == pygame.K_2:
-                    net.send("REACT|😡")
-                elif ev.key == pygame.K_3:
-                    net.send("REACT|🔥")
-
-
             elif ev.type == pygame.MOUSEMOTION:
                 exit_button.update_hover(mouse_pos)
                 if phase in ("playing", "gameover"):
