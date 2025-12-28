@@ -34,6 +34,10 @@ typedef struct
 
     int remaining1;
     int remaining2;
+
+    /* Rematch handshake (after GAMEOVER) */
+    int rematch1;
+    int rematch2;
 } Game;
 
 static Game games[MAX_GAMES];
@@ -167,6 +171,17 @@ static Game *find_game(int sock)
     return NULL;
 }
 
+/* Find the most recent game for this socket (alive or finished). */
+static Game *find_game_any(int sock)
+{
+    for (int i = game_count - 1; i >= 0; i--)
+    {
+        if (games[i].p1 == sock || games[i].p2 == sock)
+            return &games[i];
+    }
+    return NULL;
+}
+
 int gs_get_opponent_sock(int sock)
 {
     Game *g = find_game(sock);
@@ -268,6 +283,9 @@ void gs_create_session(int s1, const char *u1, int e1, int s2, const char *u2, i
     g->turn = 1;
     g->alive = 1;
     g->turn_started_at = time(NULL);
+
+    g->rematch1 = 0;
+    g->rematch2 = 0;
 
     g->dc_sock = 0;
     g->dc_expire = 0;
@@ -643,4 +661,219 @@ void gs_send_chat(int from_sock, const char *msg)
     int opp = gs_get_opponent_sock(from_sock);
     if (opp > 0)
         send_logged(opp, buf);
+}
+
+/* ===================== REMATCH ===================== */
+
+static void reset_match_state(Game *g, int starting_turn)
+{
+    g->turn = (starting_turn == 2 ? 2 : 1);
+    g->alive = 1;
+    g->turn_started_at = time(NULL);
+
+    g->dc_sock = 0;
+    g->dc_expire = 0;
+
+    clear_board(g->shots_by_p1, 'U');
+    clear_board(g->shots_by_p2, 'U');
+
+    randomize_fleet(g->ships1, &g->remaining1);
+    randomize_fleet(g->ships2, &g->remaining2);
+
+    g->rematch1 = 0;
+    g->rematch2 = 0;
+}
+
+static void send_match_start(Game *g)
+{
+    /* Send MATCH_FOUND */
+    char msg1[128], msg2[128];
+    int p1_starts = (g->turn == 1);
+
+    snprintf(msg1, sizeof(msg1),
+             "MATCH_FOUND|%s|%d|%d\n",
+             g->user2, g->elo2, p1_starts ? 1 : 0);
+    snprintf(msg2, sizeof(msg2),
+             "MATCH_FOUND|%s|%d|%d\n",
+             g->user1, g->elo1, p1_starts ? 0 : 1);
+
+    send_logged(g->p1, msg1);
+    send_logged(g->p2, msg2);
+
+    /* Send ships to each player */
+    char buf1[CELLS + 1], buf2[CELLS + 1];
+    char send1[CELLS + 32], send2[CELLS + 32];
+
+    for (int i = 0; i < CELLS; i++)
+    {
+        buf1[i] = g->ships1[i] ? '1' : '0';
+        buf2[i] = g->ships2[i] ? '1' : '0';
+    }
+    buf1[CELLS] = 0;
+    buf2[CELLS] = 0;
+
+    snprintf(send1, sizeof(send1), "MY_SHIPS|%s\n", buf1);
+    snprintf(send2, sizeof(send2), "MY_SHIPS|%s\n", buf2);
+
+    send_logged(g->p1, send1);
+    send_logged(g->p2, send2);
+
+    /* Turn signals */
+    if (p1_starts)
+    {
+        send_logged(g->p1, "YOUR_TURN\n");
+        send_logged(g->p2, "OPPONENT_TURN\n");
+    }
+    else
+    {
+        send_logged(g->p1, "OPPONENT_TURN\n");
+        send_logged(g->p2, "YOUR_TURN\n");
+    }
+}
+
+void gs_accept_rematch(int sock)
+{
+    Game *g = find_game_any(sock);
+    if (!g)
+    {
+        send_logged(sock, "ERROR|No previous match for rematch\n");
+        return;
+    }
+
+    if (g->alive)
+    {
+        send_logged(sock, "ERROR|Match still running\n");
+        return;
+    }
+
+    int is_p1 = (sock == g->p1);
+    const char *who = is_p1 ? g->user1 : g->user2;
+
+    /* Only allow accepting if the opponent already requested. */
+    int opponent_requested = is_p1 ? g->rematch2 : g->rematch1;
+    if (!opponent_requested)
+    {
+        send_logged(sock, "ERROR|No rematch request to accept\n");
+        return;
+    }
+
+    if (is_p1)
+        g->rematch1 = 1;
+    else
+        g->rematch2 = 1;
+
+    printf("[Server] REMATCH accepted by %s (sock=%d)\n", who, sock);
+    fflush(stdout);
+
+    char notice[128];
+    snprintf(notice, sizeof(notice), "REMATCH_ACCEPTED|%s\n", who);
+    if (g->p1 > 0)
+        send_logged(g->p1, notice);
+    if (g->p2 > 0)
+        send_logged(g->p2, notice);
+
+    if (g->rematch1 && g->rematch2)
+    {
+        /* Refresh ELO in case ranked match changed it */
+        g->elo1 = db_get_elo(g->user1);
+        g->elo2 = db_get_elo(g->user2);
+
+        int starting_turn = (rand() % 2) ? 1 : 2;
+        reset_match_state(g, starting_turn);
+        send_match_start(g);
+    }
+}
+
+void gs_decline_rematch(int sock)
+{
+    Game *g = find_game_any(sock);
+    if (!g)
+    {
+        send_logged(sock, "ERROR|No previous match for rematch\n");
+        return;
+    }
+
+    if (g->alive)
+    {
+        send_logged(sock, "ERROR|Match still running\n");
+        return;
+    }
+
+    int is_p1 = (sock == g->p1);
+    const char *who = is_p1 ? g->user1 : g->user2;
+
+    /* Only allow declining if the opponent already requested. */
+    int opponent_requested = is_p1 ? g->rematch2 : g->rematch1;
+    if (!opponent_requested)
+    {
+        send_logged(sock, "ERROR|No rematch request to decline\n");
+        return;
+    }
+
+    /* Clear pending request */
+    g->rematch1 = 0;
+    g->rematch2 = 0;
+
+    printf("[Server] REMATCH declined by %s (sock=%d)\n", who, sock);
+    fflush(stdout);
+
+    char notice[128];
+    snprintf(notice, sizeof(notice), "REMATCH_DECLINED|%s\n", who);
+    if (g->p1 > 0)
+        send_logged(g->p1, notice);
+    if (g->p2 > 0)
+        send_logged(g->p2, notice);
+}
+
+void gs_request_rematch(int sock)
+{
+    Game *g = find_game_any(sock);
+    if (!g)
+    {
+        send_logged(sock, "ERROR|No previous match for rematch\n");
+        return;
+    }
+
+    if (g->alive)
+    {
+        send_logged(sock, "ERROR|Match still running\n");
+        return;
+    }
+
+    int is_p1 = (sock == g->p1);
+    const char *who = is_p1 ? g->user1 : g->user2;
+
+    /* Backward-compat / convenience:
+     * If the opponent already requested a rematch and this player presses "REMATCH",
+     * treat it as ACCEPT.
+     */
+    int opponent_requested = is_p1 ? g->rematch2 : g->rematch1;
+    int self_requested = is_p1 ? g->rematch1 : g->rematch2;
+    if (opponent_requested && !self_requested)
+    {
+        gs_accept_rematch(sock);
+        return;
+    }
+
+    if (self_requested)
+    {
+        send_logged(sock, "ERROR|Rematch already requested\n");
+        return;
+    }
+
+    if (is_p1)
+        g->rematch1 = 1;
+    else
+        g->rematch2 = 1;
+
+    /* Requirement: server console should show who pressed rematch */
+    printf("[Server] REMATCH requested by %s (sock=%d)\n", who, sock);
+    fflush(stdout);
+
+    char notice[128];
+    snprintf(notice, sizeof(notice), "REMATCH_REQUEST|%s\n", who);
+    if (g->p1 > 0)
+        send_logged(g->p1, notice);
+    if (g->p2 > 0)
+        send_logged(g->p2, notice);
 }

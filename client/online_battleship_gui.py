@@ -199,6 +199,11 @@ def run_online_game(net, username, mode):
 
     REACT_DURATION = 3.0  # seconds
 
+    # rematch
+    rematch_requested = False
+    rematch_prompt_open = False
+    rematch_from_user = ""
+
     # react UI
     show_react_panel = False
 
@@ -222,6 +227,25 @@ def run_online_game(net, username, mode):
 
     exit_button = Button((REAL_WIDTH - 180, 20, 160, 40), "Back to Menu")
     show_button = Button((REAL_WIDTH - 360, 20, 160, 40), "Show Ships")
+    rematch_button = Button((REAL_WIDTH - 540, 20, 160, 40), "Rematch")
+
+    # Rematch prompt (modal) shown to the opponent when someone requests a rematch
+    REMATCH_DIALOG_W, REMATCH_DIALOG_H = 520, 200
+    rematch_dialog_x = (REAL_WIDTH - REMATCH_DIALOG_W) // 2
+    rematch_dialog_y = (REAL_HEIGHT - REMATCH_DIALOG_H) // 2
+
+    accept_rematch_button = Button(
+        (rematch_dialog_x + 80, rematch_dialog_y + 120, 160, 50),
+        "Accept",
+        color=(80, 160, 90),
+        hover=(110, 190, 120)
+    )
+    decline_rematch_button = Button(
+        (rematch_dialog_x + REMATCH_DIALOG_W - 240, rematch_dialog_y + 120, 160, 50),
+        "Decline",
+        color=(200, 70, 70),
+        hover=(230, 100, 100)
+    )
     chat_button = Button(
         (20, REAL_HEIGHT - 60, 100, 40),
         "Chat"
@@ -286,12 +310,36 @@ def run_online_game(net, username, mode):
                         queue_started_at = pygame.time.get_ticks()
 
                 elif cmd == "MATCH_FOUND":
+                    # (Re)start a match (also used for rematch)
                     phase = "playing"
+                    result = None
+                    opponent_dc = False
+                    dc_countdown = 0
+                    dc_start_time = 0
+
+                    # reset boards/state
+                    my_board = ["U"] * 100
+                    enemy_board = ["U"] * 100
+                    my_ships = ["0"] * 100
                     show_my_ships = False
+
+                    my_react = None
+                    opp_react = None
+                    show_react_panel = False
+
+                    chat_active = False
+                    chat_input = ""
+                    chat_lines = []
+
+                    rematch_requested = False
+                    rematch_prompt_open = False
+                    rematch_from_user = ""
+
                     opponent = parts[1]
                     opponent_elo = parts[2]
                     my_turn = (parts[3] == "1")
                     message = "Your turn!" if my_turn else "Opponent's turn..."
+                    message_color = GOOD if my_turn else TEXT
                     # stop/reset queue timer
                     queue_started_at = None
                     queue_elapsed = 0
@@ -378,6 +426,39 @@ def run_online_game(net, username, mode):
                         else:
                             message = "You lose!"
                             message_color = BAD                                       
+
+                elif cmd == "REMATCH_REQUEST":
+                    # Server notifies that someone requested a rematch
+                    who = parts[1] if len(parts) >= 2 else ""
+                    if who == username:
+                        message = "Rematch requested. Waiting for opponent..."
+                        message_color = TEXT
+                        rematch_requested = True
+                    else:
+                        rematch_from_user = who
+                        rematch_prompt_open = True
+                        message = f"{who} wants a rematch!"
+                        message_color = TEXT
+
+                elif cmd == "REMATCH_ACCEPTED":
+                    who = parts[1] if len(parts) >= 2 else ""
+                    rematch_prompt_open = False
+                    rematch_requested = True
+                    if who == username:
+                        message = "You accepted the rematch. Starting..."
+                    else:
+                        message = f"{who} accepted the rematch. Starting..."
+                    message_color = TEXT
+
+                elif cmd == "REMATCH_DECLINED":
+                    who = parts[1] if len(parts) >= 2 else ""
+                    rematch_prompt_open = False
+                    rematch_requested = False
+                    if who == username:
+                        message = "You declined the rematch."
+                    else:
+                        message = f"{who} declined the rematch."
+                    message_color = TEXT
             msg = net.read_nowait()
 
         # QUEUE TIMER
@@ -390,7 +471,18 @@ def run_online_game(net, username, mode):
                 running = False
 
             elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
-                running = False
+                # ESC behaves like a context-aware "back".
+                if phase in ("queue_wait_send", "queue"):
+                    net.send("CANCEL_QUEUE")
+                    running = False
+                elif phase == "playing":
+                    net.send(f"SURRENDER|{username}")
+                    phase = "gameover"
+                    result = "LOSE"
+                    message = "You surrendered!"
+                    message_color = BAD
+                elif phase == "gameover":
+                    running = False
 
             elif ev.type == pygame.KEYDOWN and chat_active:
                 if ev.key == pygame.K_RETURN:
@@ -423,6 +515,11 @@ def run_online_game(net, username, mode):
                     show_button.update_hover(mouse_pos)
                     chat_button.update_hover(mouse_pos)
                     react_button.update_hover(mouse_pos)
+                    if phase == "gameover":
+                        rematch_button.update_hover(mouse_pos)
+                        if rematch_prompt_open:
+                            accept_rematch_button.update_hover(mouse_pos)
+                            decline_rematch_button.update_hover(mouse_pos)
                 else:
                     show_button.is_hover = False
 
@@ -430,6 +527,7 @@ def run_online_game(net, username, mode):
                 if exit_button.clicked(ev):
                     # --- Not in game yet → Back to menu ---
                     if phase in ("queue_wait_send", "queue"):
+                        net.send("CANCEL_QUEUE")
                         running = False
 
                     # --- In match → Surrender ---
@@ -443,6 +541,29 @@ def run_online_game(net, username, mode):
                     # --- After match → Back to menu ---
                     elif phase == "gameover":
                         running = False
+
+                # Rematch prompt response (accept/decline)
+                if phase == "gameover" and rematch_prompt_open:
+                    if accept_rematch_button.clicked(ev):
+                        net.send("REMATCH_ACCEPT")
+                        rematch_prompt_open = False
+                        rematch_requested = True
+                        message = "You accepted the rematch. Starting..."
+                        message_color = TEXT
+                    elif decline_rematch_button.clicked(ev):
+                        net.send("REMATCH_DECLINE")
+                        rematch_prompt_open = False
+                        rematch_requested = False
+                        message = "You declined the rematch."
+                        message_color = TEXT
+
+                # Rematch request (only when no pending prompt)
+                if (phase == "gameover" and rematch_button.clicked(ev)
+                        and not rematch_requested and not rematch_prompt_open):
+                    net.send("REMATCH")
+                    rematch_requested = True
+                    message = "Rematch requested. Waiting for opponent..."
+                    message_color = TEXT
 
                 if phase == "playing":
                     if chat_button.clicked(ev):
@@ -660,6 +781,11 @@ def run_online_game(net, username, mode):
             chat_button.draw(SCREEN)
             react_button.draw(SCREEN)
 
+        if phase == "gameover":
+            # Change button label after request
+            rematch_button.text = "Requested" if rematch_requested else "Rematch"
+            rematch_button.draw(SCREEN)
+
         # Draw opponent info
         info_y = TOP_BANNER_HEIGHT - 25
         info_surf = font_small.render(info, True, TEXT)
@@ -712,8 +838,45 @@ def run_online_game(net, username, mode):
                 dc_surf,
                 (info_x + info_surf.get_width() + 20, info_y)  # 20px to the right
             )
+
+        # --- REMATCH PROMPT (modal) ---
+        if phase == "gameover" and rematch_prompt_open:
+            # Dark overlay
+            overlay = pygame.Surface((REAL_WIDTH, REAL_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 160))
+            SCREEN.blit(overlay, (0, 0))
+
+            # Dialog box
+            pygame.draw.rect(
+                SCREEN,
+                (40, 50, 70),
+                (rematch_dialog_x, rematch_dialog_y, REMATCH_DIALOG_W, REMATCH_DIALOG_H),
+                border_radius=12
+            )
+            pygame.draw.rect(
+                SCREEN,
+                WHITE,
+                (rematch_dialog_x, rematch_dialog_y, REMATCH_DIALOG_W, REMATCH_DIALOG_H),
+                2,
+                border_radius=12
+            )
+
+            title_txt = font_text.render(f"{rematch_from_user} wants a rematch", True, TEXT)
+            SCREEN.blit(
+                title_txt,
+                title_txt.get_rect(center=(REAL_WIDTH // 2, rematch_dialog_y + 55))
+            )
+            sub_txt = font_small.render("Do you accept?", True, TEXT)
+            SCREEN.blit(
+                sub_txt,
+                sub_txt.get_rect(center=(REAL_WIDTH // 2, rematch_dialog_y + 90))
+            )
+
+            accept_rematch_button.draw(SCREEN)
+            decline_rematch_button.draw(SCREEN)
                                                         
         pygame.display.flip()
         clock.tick(60)
 
-    net.close()
+    # NOTE: Do NOT close the shared session socket here.
+    # The main menu and other features reuse this same connection.
