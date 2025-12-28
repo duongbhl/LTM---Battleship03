@@ -16,14 +16,14 @@ int listen_sock;
 
 static void *afk_watcher(void *arg)
 {
-    while (1) {
+    while (1)
+    {
         sleep(1);
         gs_tick_afk();
         gs_tick_turn_timeout();
     }
     return NULL;
 }
-
 
 static void *client_thread(void *arg)
 {
@@ -38,14 +38,15 @@ static void *client_thread(void *arg)
     {
         int n = recv(sock, buf, sizeof(buf) - 1, 0);
         fflush(stdout);
-        if (n <= 0) {
+        if (n <= 0)
+        {
             printf("[Server] Disconnect detected sock=%d\n", sock);
 
             if (gs_player_in_game(sock) && gs_game_alive(sock))
             {
                 printf("[Server] Lost connection: %d → waiting 30 sec...\n", sock);
                 gs_handle_disconnect(sock);
-                break;   
+                break;
             }
 
             mm_remove_socket(sock);
@@ -53,7 +54,6 @@ static void *client_thread(void *arg)
             close(sock);
             return NULL;
         }
-
 
         buf[n] = '\0';
         printf("[RX sock=%d] %s", sock, buf);
@@ -115,7 +115,7 @@ static void *client_thread(void *arg)
             gs_handle_move(sock, x, y);
             continue;
         }
-                else if (strcmp(cmd, "FORFEIT") == 0)
+        else if (strcmp(cmd, "FORFEIT") == 0)
         {
             printf("[Server] %d sent FORFEIT\n", sock);
             gs_forfeit(sock);
@@ -127,6 +127,15 @@ static void *client_thread(void *arg)
             gs_forfeit(sock);
             continue;
         }
+        else if (strcmp(cmd, "GET_HISTORY") == 0 && parts >= 2)
+        {
+            const char *user = a;
+
+            send_logged(sock, "HISTORY_BEGIN\n");
+            db_get_history(user, sock);
+            send_logged(sock, "HISTORY_END\n");
+        }
+
 
         else if (strcmp(cmd, "REACT") == 0 && parts >= 2)
         {
@@ -182,7 +191,6 @@ void server_init(int port)
     pthread_t afk;
     pthread_create(&afk, NULL, afk_watcher, NULL);
     pthread_detach(afk);
-
 }
 
 void server_run()
