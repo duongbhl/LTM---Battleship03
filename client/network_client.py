@@ -64,6 +64,19 @@ class NetworkClient:
         except queue.Empty:
             return None
 
+    def push_front(self, msg: str):
+        """Đưa 1 message trở lại *đầu* hàng đợi recv.
+
+        Dùng trong trường hợp một màn hình (menu) đã đọc mất message quan trọng
+        (ví dụ MATCH_FOUND) nhưng muốn nhường lại cho màn hình gameplay xử lý
+        theo đúng thứ tự.
+        """
+        if msg is None:
+            return
+        # queue.Queue dùng deque nội bộ, có mutex sẵn.
+        with self.recv_queue.mutex:
+            self.recv_queue.queue.appendleft(msg)
+
     def close(self):
         self.alive = False
         try:

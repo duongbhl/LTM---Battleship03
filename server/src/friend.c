@@ -6,6 +6,7 @@
 #include "../include/utils.h"
 #include <string.h>
 #include <stdio.h>
+#include <pthread.h>
 
 /* ===================== CHALLENGE (ELO) =====================
  * Lightweight in-memory challenge handshake:
@@ -25,6 +26,7 @@ typedef struct {
 
 #define MAX_CHALLENGES 200
 static Challenge g_challenges[MAX_CHALLENGES];
+static pthread_mutex_t g_challenges_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static Challenge* find_challenge_by_target_sock(int target_sock)
 {
@@ -42,6 +44,34 @@ static Challenge* find_challenge_by_pair(int challenger_sock, int target_sock)
             g_challenges[i].challenger_sock == challenger_sock &&
             g_challenges[i].target_sock == target_sock)
             return &g_challenges[i];
+    }
+    return NULL;
+}
+
+static Challenge* find_challenge_by_target_and_challenger(int target_sock, const char* challenger_user)
+{
+    if (!challenger_user) return NULL;
+    for (int i = 0; i < MAX_CHALLENGES; i++) {
+        if (g_challenges[i].active &&
+            g_challenges[i].target_sock == target_sock &&
+            strcmp(g_challenges[i].challenger, challenger_user) == 0)
+        {
+            return &g_challenges[i];
+        }
+    }
+    return NULL;
+}
+
+static Challenge* find_challenge_by_users(const char* challenger_user, const char* target_user)
+{
+    if (!challenger_user || !target_user) return NULL;
+    for (int i = 0; i < MAX_CHALLENGES; i++) {
+        if (g_challenges[i].active &&
+            strcmp(g_challenges[i].challenger, challenger_user) == 0 &&
+            strcmp(g_challenges[i].target, target_user) == 0)
+        {
+            return &g_challenges[i];
+        }
     }
     return NULL;
 }
@@ -194,14 +224,22 @@ void handle_challenge_elo(int sock, const char *from, const char *to)
         return;
     }
 
-    /* Only 1 pending challenge per target (simple & predictable) */
-    if (find_challenge_by_target_sock(to_sock)) {
-        send_logged(sock, "ERROR|Target already has a pending challenge\n");
+    Challenge *c = NULL;
+
+    /* Allow multiple challengers to invite the same target.
+     * Prevent duplicates from the same challenger to the same target.
+     * NOTE: protect shared g_challenges with a mutex because multiple client
+     * threads can send challenges concurrently. */
+    pthread_mutex_lock(&g_challenges_mutex);
+    if (find_challenge_by_users(from, to)) {
+        pthread_mutex_unlock(&g_challenges_mutex);
+        send_logged(sock, "ERROR|Challenge already pending\n");
         return;
     }
 
-    Challenge *c = alloc_challenge();
+    c = alloc_challenge();
     if (!c) {
+        pthread_mutex_unlock(&g_challenges_mutex);
         send_logged(sock, "ERROR|Too many pending challenges\n");
         return;
     }
@@ -210,6 +248,7 @@ void handle_challenge_elo(int sock, const char *from, const char *to)
     c->target_sock = to_sock;
     strncpy(c->challenger, from, sizeof(c->challenger) - 1);
     strncpy(c->target, to, sizeof(c->target) - 1);
+    pthread_mutex_unlock(&g_challenges_mutex);
 
     printf("[Server] CHALLENGE_ELO requested: %s (sock=%d) -> %s (sock=%d)\n",
            c->challenger, c->challenger_sock, c->target, c->target_sock);
@@ -232,94 +271,158 @@ void handle_challenge_accept(int sock, const char *me, const char *other)
 {
     (void)me;
 
-    Challenge *c = find_challenge_by_target_sock(sock);
+    if (!other || other[0] == '\0') {
+        send_logged(sock, "ERROR|Invalid challenge accept\n");
+        return;
+    }
+
+    int challenger_sock = -1;
+    int target_sock = sock;
+    char challenger_user[32] = {0};
+    char target_user[32] = {0};
+
+    /* When target accepts one of many pending challenges, we will
+     * auto-decline all other challengers (so they get a clear UI signal).
+     * Store them locally then notify after releasing the mutex. */
+    int other_socks[MAX_CHALLENGES];
+    char other_users[MAX_CHALLENGES][32];
+    int other_count = 0;
+
+    pthread_mutex_lock(&g_challenges_mutex);
+
+    Challenge *c = find_challenge_by_target_and_challenger(sock, other);
     if (!c) {
+        pthread_mutex_unlock(&g_challenges_mutex);
         send_logged(sock, "ERROR|No pending challenge\n");
         return;
     }
 
-    /* Optional safety: ensure the accept references the same challenger */
-    if (other && other[0] != '\0' && strcmp(c->challenger, other) != 0) {
-        send_logged(sock, "ERROR|Challenge mismatch\n");
-        return;
-    }
-
-    int challenger_sock = c->challenger_sock;
-    int target_sock = c->target_sock;
+    challenger_sock = c->challenger_sock;
+    target_sock = c->target_sock;
 
     /* If challenger disconnected, reject and clear */
     if (challenger_sock <= 0 || user_get_sock(c->challenger) != challenger_sock) {
-        send_logged(sock, "ERROR|Challenger is no longer online\n");
         clear_challenge(c);
+        pthread_mutex_unlock(&g_challenges_mutex);
+        send_logged(sock, "ERROR|Challenger is no longer online\n");
         return;
     }
 
     /* Re-check states */
     if (gs_player_in_game(challenger_sock) || gs_player_in_game(target_sock)) {
-        send_logged(sock, "ERROR|Player already in game\n");
         clear_challenge(c);
+        pthread_mutex_unlock(&g_challenges_mutex);
+        send_logged(sock, "ERROR|Player already in game\n");
         return;
     }
     if (mm_player_waiting(challenger_sock) || mm_player_waiting(target_sock)) {
-        send_logged(sock, "ERROR|Player currently in queue\n");
         clear_challenge(c);
+        pthread_mutex_unlock(&g_challenges_mutex);
+        send_logged(sock, "ERROR|Player currently in queue\n");
         return;
     }
 
-    char challenger_user[32];
-    char target_user[32];
     strncpy(challenger_user, c->challenger, sizeof(challenger_user) - 1);
     challenger_user[sizeof(challenger_user) - 1] = '\0';
     strncpy(target_user, c->target, sizeof(target_user) - 1);
     target_user[sizeof(target_user) - 1] = '\0';
 
-    printf("[Server] CHALLENGE_ELO accepted by %s (sock=%d) vs %s (sock=%d)\n",
+    /* Collect + clear all other pending challenges to the same target */
+    for (int i = 0; i < MAX_CHALLENGES; i++) {
+        if (g_challenges[i].active &&
+            g_challenges[i].target_sock == target_sock &&
+            &g_challenges[i] != c)
+        {
+            if (other_count < MAX_CHALLENGES) {
+                other_socks[other_count] = g_challenges[i].challenger_sock;
+                strncpy(other_users[other_count], g_challenges[i].challenger, 31);
+                other_users[other_count][31] = '\0';
+                other_count++;
+            }
+            clear_challenge(&g_challenges[i]);
+        }
+    }
+
+    /* Clear accepted challenge before releasing lock */
+    clear_challenge(c);
+    pthread_mutex_unlock(&g_challenges_mutex);
+
+    printf("[Server] CHALLENGE_ELO accepted: %s (sock=%d) vs %s (sock=%d)\n",
            target_user, target_sock, challenger_user, challenger_sock);
     fflush(stdout);
+
+    /* Auto-decline all other challengers */
+    for (int i = 0; i < other_count; i++) {
+        int csock = other_socks[i];
+        if (csock > 0) {
+            char msg[160];
+            snprintf(msg, sizeof(msg), "CHALLENGE_DECLINED|%s\n", target_user);
+            send_logged(csock, msg);
+        }
+        printf("[Server] CHALLENGE_ELO auto-declined: %s declined %s (sock=%d)\n",
+               target_user, other_users[i], csock);
+        fflush(stdout);
+    }
 
     /* Start ranked session using latest ELO */
     int elo_a = db_get_elo(challenger_user);
     int elo_b = db_get_elo(target_user);
-
-    /* Clear first to avoid re-entrancy issues */
-    clear_challenge(c);
 
     gs_create_session(challenger_sock, challenger_user, elo_a,
                       target_sock, target_user, elo_b,
                       1);
 }
 
+
+
 void handle_challenge_decline(int sock, const char *me, const char *other)
 {
     (void)me;
 
-    Challenge *c = find_challenge_by_target_sock(sock);
+    if (!other || other[0] == '\0') {
+        send_logged(sock, "ERROR|Invalid challenge decline\n");
+        return;
+    }
+
+    int challenger_sock = -1;
+    int target_sock = sock;
+    char target_user[32] = {0};
+    char challenger_user[32] = {0};
+
+    pthread_mutex_lock(&g_challenges_mutex);
+    Challenge *c = find_challenge_by_target_and_challenger(sock, other);
     if (!c) {
+        pthread_mutex_unlock(&g_challenges_mutex);
         send_logged(sock, "ERROR|No pending challenge\n");
         return;
     }
 
-    if (other && other[0] != '\0' && strcmp(c->challenger, other) != 0) {
-        send_logged(sock, "ERROR|Challenge mismatch\n");
-        return;
-    }
+    challenger_sock = c->challenger_sock;
+    target_sock = c->target_sock;
+    strncpy(target_user, c->target, sizeof(target_user) - 1);
+    target_user[sizeof(target_user) - 1] = '\0';
+    strncpy(challenger_user, c->challenger, sizeof(challenger_user) - 1);
+    challenger_user[sizeof(challenger_user) - 1] = '\0';
 
-    printf("[Server] CHALLENGE_ELO declined by %s (sock=%d) vs %s (sock=%d)\n",
-           c->target, c->target_sock, c->challenger, c->challenger_sock);
+    clear_challenge(c);
+    pthread_mutex_unlock(&g_challenges_mutex);
+
+    printf("[Server] CHALLENGE_ELO declined: %s (sock=%d) vs %s (sock=%d)\n",
+           target_user, target_sock, challenger_user, challenger_sock);
     fflush(stdout);
 
     /* Notify both sides */
     {
-        char msg[128];
-        snprintf(msg, sizeof(msg), "CHALLENGE_DECLINED|%s\n", c->target);
-        if (c->challenger_sock > 0)
-            send_logged(c->challenger_sock, msg);
-        if (c->target_sock > 0)
-            send_logged(c->target_sock, msg);
+        char msg[160];
+        snprintf(msg, sizeof(msg), "CHALLENGE_DECLINED|%s\n", target_user);
+        if (challenger_sock > 0)
+            send_logged(challenger_sock, msg);
+        if (target_sock > 0)
+            send_logged(target_sock, msg);
     }
-
-    clear_challenge(c);
 }
+
+
 
 void handle_challenge_cancel(int sock, const char *from, const char *to)
 {
@@ -331,6 +434,7 @@ void handle_challenge_cancel(int sock, const char *from, const char *to)
     int to_sock = user_get_sock(to);
     if (to_sock < 0) {
         /* Target offline: still remove any pending pair */
+        pthread_mutex_lock(&g_challenges_mutex);
         for (int i = 0; i < MAX_CHALLENGES; i++) {
             if (g_challenges[i].active &&
                 g_challenges[i].challenger_sock == sock &&
@@ -338,32 +442,49 @@ void handle_challenge_cancel(int sock, const char *from, const char *to)
                 strcmp(g_challenges[i].target, to) == 0)
             {
                 clear_challenge(&g_challenges[i]);
+                pthread_mutex_unlock(&g_challenges_mutex);
                 send_logged(sock, "CHALLENGE_CANCELLED\n");
                 return;
             }
         }
+        pthread_mutex_unlock(&g_challenges_mutex);
         send_logged(sock, "ERROR|No pending challenge to cancel\n");
         return;
     }
 
+    int target_sock = to_sock;
+    int challenger_sock = -1;
+    char target_user[32] = {0};
+    char challenger_user[32] = {0};
+
+    pthread_mutex_lock(&g_challenges_mutex);
     Challenge *c = find_challenge_by_pair(sock, to_sock);
     if (!c) {
+        pthread_mutex_unlock(&g_challenges_mutex);
         send_logged(sock, "ERROR|No pending challenge to cancel\n");
         return;
     }
 
+    challenger_sock = c->challenger_sock;
+    target_sock = c->target_sock;
+    strncpy(target_user, c->target, sizeof(target_user) - 1);
+    target_user[sizeof(target_user) - 1] = '\0';
+    strncpy(challenger_user, c->challenger, sizeof(challenger_user) - 1);
+    challenger_user[sizeof(challenger_user) - 1] = '\0';
+
+    clear_challenge(c);
+    pthread_mutex_unlock(&g_challenges_mutex);
+
     printf("[Server] CHALLENGE_ELO cancelled by %s (sock=%d) -> %s (sock=%d)\n",
-           c->challenger, c->challenger_sock, c->target, c->target_sock);
+           challenger_user, challenger_sock, target_user, target_sock);
     fflush(stdout);
 
     {
         char msg[128];
         snprintf(msg, sizeof(msg), "CHALLENGE_CANCELLED|%s\n", from);
-        if (c->target_sock > 0)
-            send_logged(c->target_sock, msg);
+        if (target_sock > 0)
+            send_logged(target_sock, msg);
         send_logged(sock, "CHALLENGE_CANCELLED\n");
     }
-
-    clear_challenge(c);
 }
 

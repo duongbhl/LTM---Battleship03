@@ -80,13 +80,17 @@ search_status_time = 0
 SEARCH_STATUS_DURATION = 3
 
 # ----- FRIEND CHALLENGE (ELO) STATE -----
-challenge_from_user = None      # str | None
+challenge_requests = []         # list[str] - users who challenged you
 challenge_popup_open = False
 
 challenge_status_text = None
 challenge_status_color = None
 challenge_status_time = 0
 CHALLENGE_STATUS_DURATION = 3
+
+# ----- CHALLENGE DECLINED POPUP -----
+challenge_decline_popup_open = False
+challenge_decline_popup_by = ""   # username who declined your challenge
 
 
 
@@ -784,8 +788,9 @@ def friend_notifications_screen():
 
 def friends_online_screen():
     global online_users, session_sock, current_user
-    global challenge_from_user, challenge_popup_open
+    global challenge_requests, challenge_popup_open
     global challenge_status_text, challenge_status_color, challenge_status_time
+    global challenge_decline_popup_open, challenge_decline_popup_by
 
     clock = pygame.time.Clock()
 
@@ -817,6 +822,7 @@ def friends_online_screen():
     )
 
     last_fetch = 0
+    scroll_offset = 0
     running = True
     while running:
         SCREEN.fill(BG_COLOR)
@@ -832,7 +838,8 @@ def friends_online_screen():
 
                 elif msg.startswith("CHALLENGE_INVITE|"):
                     sender = msg.split("|", 1)[1]
-                    challenge_from_user = sender
+                    if sender and sender not in challenge_requests:
+                        challenge_requests.append(sender)
                     challenge_popup_open = True
 
                 elif msg.startswith("CHALLENGE_SENT|"):
@@ -843,21 +850,31 @@ def friends_online_screen():
 
                 elif msg.startswith("CHALLENGE_DECLINED|"):
                     who = msg.split("|", 1)[1]
-                    challenge_status_text = f"Challenge declined by {who}"
-                    challenge_status_color = ERROR_COLOR
-                    challenge_status_time = time.time()
+                    # If you are the challenger and the other side declines, show popup
+                    if who and who != current_user:
+                        challenge_decline_popup_open = True
+                        challenge_decline_popup_by = who
+                        challenge_status_text = None
 
                 elif msg.startswith("CHALLENGE_CANCELLED|"):
                     who = msg.split("|", 1)[1]
+                    # If the challenger cancels, remove it from pending list
+                    if who in challenge_requests:
+                        challenge_requests.remove(who)
+                        if not challenge_requests:
+                            challenge_popup_open = False
+                            scroll_offset = 0
+
                     challenge_status_text = f"Challenge cancelled by {who}"
                     challenge_status_color = (220, 200, 80)
                     challenge_status_time = time.time()
 
                 elif msg.startswith("MATCH_FOUND|"):
                     # A game has started (e.g. challenge accepted). Hand control to the game UI.
-                    session_sock.recv_queue.put(msg)
+                    # Put back to FRONT so gameplay receives MATCH_FOUND before MY_SHIPS / YOUR_TURN
+                    session_sock.push_front(msg)
                     challenge_popup_open = False
-                    challenge_from_user = None
+                    challenge_requests.clear()
                     launch_game("rank", send_find_match=False)
                     return
 
@@ -915,59 +932,181 @@ def friends_online_screen():
 
         back_btn.is_hovered(mouse_pos)
         back_btn.draw(SCREEN)
-
         # ===== Challenge popup modal =====
-        if challenge_popup_open and challenge_from_user:
+        challenge_row_buttons = []  # list[(sender, accept_btn, decline_btn)]
+        if challenge_popup_open and challenge_requests:
             overlay = pygame.Surface((MENU_WIDTH, MENU_HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 160))
             SCREEN.blit(overlay, (0, 0))
 
+            row_h = 52
+            header_h = 92
+            bottom_pad = 26
+            dialog_w = 780
+            max_h = MENU_HEIGHT - 120
+            n = len(challenge_requests)
+            dialog_h = min(max(260, header_h + bottom_pad + n * row_h), max_h)
+
+            dialog_x = (MENU_WIDTH - dialog_w) // 2
+            dialog_y = (MENU_HEIGHT - dialog_h) // 2
+
             pygame.draw.rect(SCREEN, (45, 55, 75), (dialog_x, dialog_y, dialog_w, dialog_h), border_radius=14)
             pygame.draw.rect(SCREEN, (120, 150, 200), (dialog_x, dialog_y, dialog_w, dialog_h), 2, border_radius=14)
 
-            title2 = font_button.render("ELO Challenge", True, WHITE)
-            SCREEN.blit(title2, title2.get_rect(center=(dialog_x + dialog_w // 2, dialog_y + 50)))
+            title2 = font_button.render("ELO Challenges", True, WHITE)
+            SCREEN.blit(title2, title2.get_rect(center=(dialog_x + dialog_w // 2, dialog_y + 40)))
 
-            msg2 = font_small.render(f"{challenge_from_user} invited you to a ranked match", True, TEXT_COLOR)
-            SCREEN.blit(msg2, msg2.get_rect(center=(dialog_x + dialog_w // 2, dialog_y + 100)))
+            msg2 = font_small.render("Accept / Decline each invite", True, (200, 200, 220))
+            SCREEN.blit(msg2, msg2.get_rect(center=(dialog_x + dialog_w // 2, dialog_y + 76)))
 
-            accept_btn.is_hovered(mouse_pos)
-            decline_btn.is_hovered(mouse_pos)
-            accept_btn.draw(SCREEN)
-            decline_btn.draw(SCREEN)
+            visible_rows = max(1, int((dialog_h - header_h - bottom_pad) // row_h))
+            if scroll_offset > max(0, n - visible_rows):
+                scroll_offset = max(0, n - visible_rows)
+
+            start_i = scroll_offset
+            end_i = min(n, start_i + visible_rows)
+
+            if n > visible_rows:
+                hint = font_small.render(f"Scroll: {start_i + 1}-{end_i} / {n}", True, (180, 180, 200))
+                SCREEN.blit(hint, (dialog_x + 20, dialog_y + dialog_h - 28))
+
+            y0 = dialog_y + header_h
+            for idx in range(start_i, end_i):
+                sender = challenge_requests[idx]
+                y = y0 + (idx - start_i) * row_h
+
+                line = font_small.render(sender, True, TEXT_COLOR)
+                SCREEN.blit(line, (dialog_x + 30, y + 10))
+
+                a_btn = Button(
+                    (dialog_x + dialog_w - 330, y + 6, 140, 40),
+                    "Accept",
+                    base_font=font_small,
+                    color=(70, 160, 90),
+                    hover_color=(90, 190, 120)
+                )
+                d_btn = Button(
+                    (dialog_x + dialog_w - 170, y + 6, 140, 40),
+                    "Decline",
+                    base_font=font_small,
+                    color=(200, 70, 70),
+                    hover_color=(230, 100, 100)
+                )
+
+                a_btn.is_hovered(mouse_pos)
+                d_btn.is_hovered(mouse_pos)
+                a_btn.draw(SCREEN)
+                d_btn.draw(SCREEN)
+
+                challenge_row_buttons.append((sender, a_btn, d_btn))
+
+        # ===== Popup: Challenge declined (for challengers) =====
+        declined_ok_btn = None
+        if challenge_decline_popup_open and challenge_decline_popup_by:
+            overlay = pygame.Surface((MENU_WIDTH, MENU_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 170))
+            SCREEN.blit(overlay, (0, 0))
+
+            pw, ph = 560, 220
+            px = (MENU_WIDTH - pw) // 2
+            py = (MENU_HEIGHT - ph) // 2
+
+            pygame.draw.rect(SCREEN, (45, 55, 75), (px, py, pw, ph), border_radius=14)
+            pygame.draw.rect(SCREEN, (120, 150, 200), (px, py, pw, ph), 2, border_radius=14)
+
+            title = font_button.render("Th\xe1ch \u0111\u1ea5u", True, WHITE)
+            SCREEN.blit(title, title.get_rect(center=(px + pw // 2, py + 40)))
+
+            msg_txt = f"{challenge_decline_popup_by} \u0111\xe3 t\u1eeb ch\u1ed1i l\u1eddi th\xe1ch \u0111\u1ea5u c\u1ee7a b\u1ea1n."
+            msg_surf = font_small.render(msg_txt, True, (230, 230, 255))
+            SCREEN.blit(msg_surf, msg_surf.get_rect(center=(px + pw // 2, py + 90)))
+
+            declined_ok_btn = Button(
+                (px + (pw - 180) // 2, py + 140, 180, 55),
+                "OK",
+                base_font=font_small
+            )
+            declined_ok_btn.is_hovered(mouse_pos)
+            declined_ok_btn.draw(SCREEN)
 
         # ===== Events =====
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 pygame.quit(); exit()
+            # ===== Declined popup is modal =====
+            if challenge_decline_popup_open and challenge_decline_popup_by:
+                if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+                    challenge_decline_popup_open = False
+                    challenge_decline_popup_by = ""
+                    continue
 
-            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
-                if challenge_popup_open:
-                    # ESC closes the popup (treated as decline)
-                    if session_sock and current_user and challenge_from_user:
-                        session_sock.send(f"CHALLENGE_DECLINE|{current_user}|{challenge_from_user}")
-                    challenge_popup_open = False
-                    challenge_from_user = None
-                else:
-                    running = False
+                if declined_ok_btn and declined_ok_btn.is_clicked(ev):
+                    challenge_decline_popup_open = False
+                    challenge_decline_popup_by = ""
+                    continue
 
-            if challenge_popup_open and challenge_from_user:
-                # Only handle popup clicks
-                if accept_btn.is_clicked(ev):
-                    if session_sock and current_user:
-                        session_sock.send(f"CHALLENGE_ACCEPT|{current_user}|{challenge_from_user}")
-                    challenge_popup_open = False
-                    # Start game UI and wait for MATCH_FOUND (server will create session)
-                    launch_game("rank", send_find_match=False)
-                    return
-
-                if decline_btn.is_clicked(ev):
-                    if session_sock and current_user:
-                        session_sock.send(f"CHALLENGE_DECLINE|{current_user}|{challenge_from_user}")
-                    challenge_popup_open = False
-                    challenge_from_user = None
-
+                # Block other input while popup is open
                 continue
+            # ===== Challenge popup is modal =====
+            if challenge_popup_open and challenge_requests:
+                # Mouse wheel scroll support
+                if ev.type == pygame.MOUSEWHEEL:
+                    if ev.y > 0:
+                        scroll_offset = max(0, scroll_offset - 1)
+                    elif ev.y < 0:
+                        scroll_offset = min(max(0, len(challenge_requests) - 1), scroll_offset + 1)
+                    continue
+
+                if ev.type == pygame.MOUSEBUTTONDOWN:
+                    if ev.button == 4:
+                        scroll_offset = max(0, scroll_offset - 1)
+                        continue
+                    if ev.button == 5:
+                        scroll_offset = min(max(0, len(challenge_requests) - 1), scroll_offset + 1)
+                        continue
+
+                # ESC declines all pending invites
+                if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+                    if session_sock and current_user:
+                        for sender in list(challenge_requests):
+                            session_sock.send(f"CHALLENGE_DECLINE|{current_user}|{sender}")
+                    challenge_requests.clear()
+                    challenge_popup_open = False
+                    scroll_offset = 0
+                    continue
+
+                handled = False
+                for sender, a_btn, d_btn in challenge_row_buttons:
+                    if a_btn.is_clicked(ev):
+                        if session_sock and current_user:
+                            session_sock.send(f"CHALLENGE_ACCEPT|{current_user}|{sender}")
+                            # UI hint while waiting for MATCH_FOUND
+                            challenge_status_text = f"\u0110\xe3 ch\u1ea5p nh\u1eadn {sender}. \u0110ang v\xe0o tr\u1eadn..."
+                            challenge_status_color = SUCCESS_COLOR
+                            challenge_status_time = time.time()
+                        challenge_requests.clear()
+                        challenge_popup_open = False
+                        scroll_offset = 0
+                        handled = True
+                        break
+
+                    if d_btn.is_clicked(ev):
+                        if session_sock and current_user:
+                            session_sock.send(f"CHALLENGE_DECLINE|{current_user}|{sender}")
+                        if sender in challenge_requests:
+                            challenge_requests.remove(sender)
+                        if not challenge_requests:
+                            challenge_popup_open = False
+                            scroll_offset = 0
+                        handled = True
+                        break
+
+                # Ignore other interactions while popup open
+                continue
+
+            # ESC without popup closes this screen
+            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+                running = False
 
             # Normal interactions
             if back_btn.is_clicked(ev):
@@ -1056,8 +1195,9 @@ def main_menu():
     global friend_search_text, friend_search_active
     global friend_notify, friend_notify_time
     global search_status_text, search_status_color, search_status_time
-    global challenge_from_user, challenge_popup_open
+    global challenge_requests, challenge_popup_open
     global challenge_status_text, challenge_status_color, challenge_status_time
+    global challenge_decline_popup_open, challenge_decline_popup_by
 
     button_width = int(MENU_WIDTH * 0.45)
     button_height = int(MENU_HEIGHT * 0.09)
@@ -1134,6 +1274,8 @@ def main_menu():
     running = True
     user_rects = []
 
+    scroll_offset = 0  # for challenge popup scrolling
+
     while running:
         SCREEN.fill(BG_COLOR)
         mouse_pos = pygame.mouse.get_pos()
@@ -1166,7 +1308,8 @@ def main_menu():
 
                 elif msg.startswith("CHALLENGE_INVITE|"):
                     sender = msg.split("|", 1)[1]
-                    challenge_from_user = sender
+                    if sender and sender not in challenge_requests:
+                        challenge_requests.append(sender)
                     challenge_popup_open = True
 
                 elif msg.startswith("CHALLENGE_SENT|"):
@@ -1177,23 +1320,34 @@ def main_menu():
 
                 elif msg.startswith("CHALLENGE_DECLINED|"):
                     who = msg.split("|", 1)[1]
-                    challenge_status_text = f"Challenge declined by {who}"
-                    challenge_status_color = ERROR_COLOR
-                    challenge_status_time = time.time()
+                    # If you are the challenger and the other side declines, show popup
+                    if who and who != current_user:
+                        challenge_decline_popup_open = True
+                        challenge_decline_popup_by = who
+                        challenge_status_text = None
 
                 elif msg.startswith("CHALLENGE_CANCELLED"):
                     # may be "CHALLENGE_CANCELLED" or "CHALLENGE_CANCELLED|user"
                     parts = msg.split("|", 1)
                     who = parts[1] if len(parts) > 1 else ""
+
+                    # If the challenger cancels (and you are the target), remove it from pending list
+                    if who and who in challenge_requests:
+                        challenge_requests.remove(who)
+                        if not challenge_requests:
+                            challenge_popup_open = False
+                            scroll_offset = 0
+
                     challenge_status_text = (f"Challenge cancelled by {who}" if who else "Challenge cancelled")
                     challenge_status_color = (220, 200, 80)
                     challenge_status_time = time.time()
 
                 elif msg.startswith("MATCH_FOUND|"):
                     # A game has started (e.g. your challenge was accepted). Hand control to the game UI.
-                    session_sock.recv_queue.put(msg)
+                    # Put back to FRONT so gameplay receives MATCH_FOUND before MY_SHIPS / YOUR_TURN
+                    session_sock.push_front(msg)
                     challenge_popup_open = False
-                    challenge_from_user = None
+                    challenge_requests.clear()
                     launch_game("rank", send_find_match=False)
                     break
 
@@ -1213,6 +1367,53 @@ def main_menu():
                     break
 
                 msg = session_sock.read_nowait()
+
+        # Precompute challenge popup layout/buttons (used for both event handling and drawing)
+        challenge_row_buttons = []  # list[(sender, accept_btn, decline_btn)]
+        challenge_popup_layout = None
+        if challenge_popup_open and challenge_requests:
+            row_h = 52
+            header_h = 92
+            bottom_pad = 26
+            pop_w = 780
+            max_h = MENU_HEIGHT - 160
+
+            n_inv = len(challenge_requests)
+            pop_h = min(max(260, header_h + bottom_pad + n_inv * row_h), max_h)
+            pop_x = (MENU_WIDTH - pop_w) // 2
+            pop_y = (MENU_HEIGHT - pop_h) // 2
+
+            visible_rows = max(1, int((pop_h - header_h - bottom_pad) // row_h))
+            if scroll_offset > max(0, n_inv - visible_rows):
+                scroll_offset = max(0, n_inv - visible_rows)
+
+            start_i = scroll_offset
+            end_i = min(n_inv, start_i + visible_rows)
+
+            y0 = pop_y + header_h
+            for idx in range(start_i, end_i):
+                sender = challenge_requests[idx]
+                y = y0 + (idx - start_i) * row_h
+
+                a_btn = Button(
+                    (pop_x + pop_w - 330, y + 6, 140, 40),
+                    "Accept",
+                    base_font=font_small,
+                    color=(70, 160, 90),
+                    hover_color=(90, 190, 120)
+                )
+                d_btn = Button(
+                    (pop_x + pop_w - 170, y + 6, 140, 40),
+                    "Decline",
+                    base_font=font_small,
+                    color=(200, 70, 70),
+                    hover_color=(230, 100, 100)
+                )
+                a_btn.is_hovered(mouse_pos)
+                d_btn.is_hovered(mouse_pos)
+                challenge_row_buttons.append((sender, a_btn, d_btn))
+
+            challenge_popup_layout = (pop_x, pop_y, pop_w, pop_h, header_h, bottom_pad, row_h, start_i, end_i, n_inv, visible_rows)
 
         # ================= TITLE =================
         title = font_title.render("BATTLESHIP", True, TITLE_COLOR)
@@ -1277,6 +1478,19 @@ def main_menu():
             st2 = font_small.render(challenge_status_text, True, challenge_status_color)
             SCREEN.blit(st2, (20, title_y_pos + 105))
 
+        # Declined popup button (modal)
+        declined_ok_btn = None
+        if challenge_decline_popup_open and challenge_decline_popup_by:
+            pw, ph = 560, 220
+            px = (MENU_WIDTH - pw) // 2
+            py = (MENU_HEIGHT - ph) // 2
+            declined_ok_btn = Button(
+                (px + (pw - 180) // 2, py + 140, 180, 55),
+                "OK",
+                base_font=font_small
+            )
+            declined_ok_btn.is_hovered(mouse_pos)
+
         
 
         # ================= EVENTS =================
@@ -1284,35 +1498,75 @@ def main_menu():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 exit()
+            # ===== Declined popup is modal =====
+            if challenge_decline_popup_open and challenge_decline_popup_by:
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    challenge_decline_popup_open = False
+                    challenge_decline_popup_by = ""
+                    continue
 
+                if declined_ok_btn and declined_ok_btn.is_clicked(event):
+                    challenge_decline_popup_open = False
+                    challenge_decline_popup_by = ""
+                    continue
+
+                # Block other input while popup is open
+                continue
             # ===== Challenge popup is modal (blocks the rest of the menu) =====
-            if challenge_popup_open and challenge_from_user:
-                # Update hover so is_clicked works
-                accept_challenge_btn.is_hovered(mouse_pos)
-                decline_challenge_btn.is_hovered(mouse_pos)
+            if challenge_popup_open and challenge_requests:
+                # Mouse wheel scroll support
+                if event.type == pygame.MOUSEWHEEL:
+                    if event.y > 0:
+                        scroll_offset = max(0, scroll_offset - 1)
+                    elif event.y < 0:
+                        scroll_offset = min(max(0, len(challenge_requests) - 1), scroll_offset + 1)
+                    continue
 
-                # ESC = Decline
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.button == 4:
+                        scroll_offset = max(0, scroll_offset - 1)
+                        continue
+                    if event.button == 5:
+                        scroll_offset = min(max(0, len(challenge_requests) - 1), scroll_offset + 1)
+                        continue
+
+                # ESC = Decline all pending invites
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     if session_sock and current_user:
-                        session_sock.send(f"CHALLENGE_DECLINE|{current_user}|{challenge_from_user}")
+                        for sender in list(challenge_requests):
+                            session_sock.send(f"CHALLENGE_DECLINE|{current_user}|{sender}")
+                    challenge_requests.clear()
                     challenge_popup_open = False
-                    challenge_from_user = None
+                    scroll_offset = 0
                     continue
+                # Handle Accept/Decline per-row
+                handled = False
+                for sender, a_btn, d_btn in challenge_row_buttons:
+                    a_btn.is_hovered(mouse_pos)
+                    d_btn.is_hovered(mouse_pos)
 
-                if accept_challenge_btn.is_clicked(event):
-                    if session_sock and current_user:
-                        session_sock.send(f"CHALLENGE_ACCEPT|{current_user}|{challenge_from_user}")
-                    challenge_popup_open = False
-                    # Start the game UI and wait for MATCH_FOUND
-                    launch_game("rank", send_find_match=False)
-                    continue
+                    if a_btn.is_clicked(event):
+                        if session_sock and current_user:
+                            session_sock.send(f"CHALLENGE_ACCEPT|{current_user}|{sender}")
+                            challenge_status_text = f"\u0110\xe3 ch\u1ea5p nh\u1eadn {sender}. \u0110ang v\xe0o tr\u1eadn..."
+                            challenge_status_color = SUCCESS_COLOR
+                            challenge_status_time = time.time()
+                        challenge_requests.clear()
+                        challenge_popup_open = False
+                        scroll_offset = 0
+                        handled = True
+                        break
 
-                if decline_challenge_btn.is_clicked(event):
-                    if session_sock and current_user:
-                        session_sock.send(f"CHALLENGE_DECLINE|{current_user}|{challenge_from_user}")
-                    challenge_popup_open = False
-                    challenge_from_user = None
-                    continue
+                    if d_btn.is_clicked(event):
+                        if session_sock and current_user:
+                            session_sock.send(f"CHALLENGE_DECLINE|{current_user}|{sender}")
+                        if sender in challenge_requests:
+                            challenge_requests.remove(sender)
+                        if not challenge_requests:
+                            challenge_popup_open = False
+                            scroll_offset = 0
+                        handled = True
+                        break
 
                 # Ignore other interactions while popup open
                 continue
@@ -1393,26 +1647,63 @@ def main_menu():
 
         online_button.is_hovered(mouse_pos)
         online_button.draw(SCREEN)
-
         # ===== Challenge popup modal (draw last) =====
-        if challenge_popup_open and challenge_from_user:
+        if challenge_popup_open and challenge_requests and challenge_popup_layout:
+            pop_x, pop_y, pop_w, pop_h, header_h, bottom_pad, row_h, start_i, end_i, n_inv, visible_rows = challenge_popup_layout
+
             overlay = pygame.Surface((MENU_WIDTH, MENU_HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 160))
             SCREEN.blit(overlay, (0, 0))
 
-            pygame.draw.rect(SCREEN, (45, 55, 75), (chall_x, chall_y, chall_w, chall_h), border_radius=14)
-            pygame.draw.rect(SCREEN, (120, 150, 200), (chall_x, chall_y, chall_w, chall_h), 2, border_radius=14)
+            pygame.draw.rect(SCREEN, (45, 55, 75), (pop_x, pop_y, pop_w, pop_h), border_radius=14)
+            pygame.draw.rect(SCREEN, (120, 150, 200), (pop_x, pop_y, pop_w, pop_h), 2, border_radius=14)
 
-            t = font_button.render("ELO Challenge", True, WHITE)
-            SCREEN.blit(t, t.get_rect(center=(chall_x + chall_w // 2, chall_y + 50)))
+            t = font_button.render("ELO Challenges", True, WHITE)
+            SCREEN.blit(t, t.get_rect(center=(pop_x + pop_w // 2, pop_y + 40)))
 
-            m = font_small.render(f"{challenge_from_user} invited you to a ranked match", True, TEXT_COLOR)
-            SCREEN.blit(m, m.get_rect(center=(chall_x + chall_w // 2, chall_y + 100)))
+            m = font_small.render("Accept / Decline each invite", True, (200, 200, 220))
+            SCREEN.blit(m, m.get_rect(center=(pop_x + pop_w // 2, pop_y + 76)))
 
-            accept_challenge_btn.is_hovered(mouse_pos)
-            decline_challenge_btn.is_hovered(mouse_pos)
-            accept_challenge_btn.draw(SCREEN)
-            decline_challenge_btn.draw(SCREEN)
+            if n_inv > visible_rows:
+                hint = font_small.render(f"Scroll: {start_i + 1}-{end_i} / {n_inv}", True, (180, 180, 200))
+                SCREEN.blit(hint, (pop_x + 20, pop_y + pop_h - 28))
+
+            y0 = pop_y + header_h
+            for idx in range(start_i, end_i):
+                sender = challenge_requests[idx]
+                y = y0 + (idx - start_i) * row_h
+                line = font_small.render(sender, True, TEXT_COLOR)
+                SCREEN.blit(line, (pop_x + 30, y + 10))
+
+            for _, a_btn, d_btn in challenge_row_buttons:
+                a_btn.is_hovered(mouse_pos)
+                d_btn.is_hovered(mouse_pos)
+                a_btn.draw(SCREEN)
+                d_btn.draw(SCREEN)
+
+        # ===== Popup: Challenge declined (draw last) =====
+        if challenge_decline_popup_open and challenge_decline_popup_by:
+            overlay = pygame.Surface((MENU_WIDTH, MENU_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 170))
+            SCREEN.blit(overlay, (0, 0))
+
+            pw, ph = 560, 220
+            px = (MENU_WIDTH - pw) // 2
+            py = (MENU_HEIGHT - ph) // 2
+
+            pygame.draw.rect(SCREEN, (45, 55, 75), (px, py, pw, ph), border_radius=14)
+            pygame.draw.rect(SCREEN, (120, 150, 200), (px, py, pw, ph), 2, border_radius=14)
+
+            title = font_button.render("Th\xe1ch \u0111\u1ea5u", True, WHITE)
+            SCREEN.blit(title, title.get_rect(center=(px + pw // 2, py + 40)))
+
+            msg_txt = f"{challenge_decline_popup_by} \u0111\xe3 t\u1eeb ch\u1ed1i l\u1eddi th\xe1ch \u0111\u1ea5u c\u1ee7a b\u1ea1n."
+            msg_surf = font_small.render(msg_txt, True, (230, 230, 255))
+            SCREEN.blit(msg_surf, msg_surf.get_rect(center=(px + pw // 2, py + 90)))
+
+            if declined_ok_btn:
+                declined_ok_btn.is_hovered(mouse_pos)
+                declined_ok_btn.draw(SCREEN)
 
 
         now = time.time()
