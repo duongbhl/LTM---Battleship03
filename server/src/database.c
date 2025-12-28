@@ -13,7 +13,7 @@ int db_init(const char *filename)
         return -1;
     }
 
-    const char *sql =
+    const char *sql_users =
         "CREATE TABLE IF NOT EXISTS users ("
         " id INTEGER PRIMARY KEY AUTOINCREMENT,"
         " username TEXT UNIQUE,"
@@ -31,16 +31,37 @@ int db_init(const char *filename)
         " created_at DATETIME DEFAULT CURRENT_TIMESTAMP"
         ");";
 
+    /* ✅ NEW: FRIENDS TABLE */
+    const char *sql_friends =
+        "CREATE TABLE IF NOT EXISTS friends ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " user TEXT NOT NULL,"
+        " friend TEXT NOT NULL,"
+        " status TEXT NOT NULL,"
+        " created_at DATETIME DEFAULT CURRENT_TIMESTAMP,"
+        " UNIQUE(user, friend)"
+        ");";
+
     char *err = NULL;
-    if (sqlite3_exec(g_db, sql, NULL, NULL, &err) != SQLITE_OK)
+
+    if (sqlite3_exec(g_db, sql_users, NULL, NULL, &err) != SQLITE_OK)
     {
-        fprintf(stderr, "DB CREATE TABLE ERROR: %s\n", err);
+        fprintf(stderr, "DB CREATE USERS TABLE ERROR: %s\n", err);
         sqlite3_free(err);
         return -1;
     }
+
     if (sqlite3_exec(g_db, sql_matches, NULL, NULL, &err) != SQLITE_OK)
     {
         fprintf(stderr, "DB CREATE MATCHES TABLE ERROR: %s\n", err);
+        sqlite3_free(err);
+        return -1;
+    }
+
+    /* ✅ CREATE FRIENDS TABLE */
+    if (sqlite3_exec(g_db, sql_friends, NULL, NULL, &err) != SQLITE_OK)
+    {
+        fprintf(stderr, "DB CREATE FRIENDS TABLE ERROR: %s\n", err);
         sqlite3_free(err);
         return -1;
     }
@@ -245,4 +266,94 @@ void db_get_history(const char *user, int sock)
     }
 
     sqlite3_finalize(stmt);
+}
+
+int db_friend_request_exists(const char *from, const char *to)
+{
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "SELECT 1 FROM friends WHERE user=? AND friend=? LIMIT 1";
+
+    sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL);
+    sqlite3_bind_text(stmt, 1, from, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, to, -1, SQLITE_STATIC);
+
+    int exists = (sqlite3_step(stmt) == SQLITE_ROW);
+    sqlite3_finalize(stmt);
+    return exists;
+}
+
+void db_insert_friend_request(const char *from, const char *to)
+{
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "INSERT OR IGNORE INTO friends(user, friend, status) "
+        "VALUES(?, ?, 'PENDING')";
+
+    sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL);
+    sqlite3_bind_text(stmt, 1, from, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, to, -1, SQLITE_STATIC);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+void db_accept_friend(const char *from, const char *to)
+{
+    sqlite3_stmt *stmt;
+
+    // Update request to ACCEPTED
+    const char *sql1 =
+        "UPDATE friends SET status='ACCEPTED' "
+        "WHERE user=? AND friend=?";
+
+    sqlite3_prepare_v2(g_db, sql1, -1, &stmt, NULL);
+    sqlite3_bind_text(stmt, 1, from, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, to, -1, SQLITE_STATIC);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    // Insert reverse row
+    const char *sql2 =
+        "INSERT OR IGNORE INTO friends(user, friend, status) "
+        "VALUES(?, ?, 'ACCEPTED')";
+
+    sqlite3_prepare_v2(g_db, sql2, -1, &stmt, NULL);
+    sqlite3_bind_text(stmt, 1, to, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, from, -1, SQLITE_STATIC);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+void db_delete_friend(const char *user, const char *friend)
+{
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "DELETE FROM friends WHERE user=? AND friend=?";
+
+    sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL);
+    sqlite3_bind_text(stmt, 1, user, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, friend, -1, SQLITE_STATIC);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+int db_get_accepted_friends(const char *user, char out[][32], int max)
+{
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "SELECT friend FROM friends "
+        "WHERE user=? AND status='ACCEPTED'";
+
+    sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL);
+    sqlite3_bind_text(stmt, 1, user, -1, SQLITE_STATIC);
+
+    int count = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && count < max)
+    {
+        const char *f = (const char *)sqlite3_column_text(stmt, 0);
+        strncpy(out[count++], f, 31);
+    }
+
+    sqlite3_finalize(stmt);
+    return count;
 }

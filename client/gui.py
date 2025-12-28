@@ -836,7 +836,6 @@ def main_menu():
                 if btn.is_clicked(event):
                     if key == "pvp_open":
                         launch_game('open')
-                        return
                     elif key == "pvp_rank":
                         launch_game('rank')
                     elif key == "logout":
@@ -848,6 +847,11 @@ def main_menu():
                         pygame.time.wait(1000)
 
                         if session_sock:
+                            try:
+                                session_sock.send(f"LOGOUT|{current_user}")
+                                
+                            except:
+                                pass
                             session_sock.close()
                             session_sock = None
                         

@@ -66,3 +66,12 @@ void user_get_all(char *out, int maxlen)
 }
 
 
+int user_get_sock(const char *username)
+{
+    for (int i = 0; i < count; i++)
+    {
+        if (strcmp(list[i].username, username) == 0)
+            return list[i].sock;
+    }
+    return -1;
+}

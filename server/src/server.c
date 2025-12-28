@@ -4,6 +4,7 @@
 #include "../include/game_session.h"
 #include "../include/database.h"
 #include "../include/utils.h"
+#include "../include/friend.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,6 +94,11 @@ static void *client_thread(void *arg)
             handle_register(sock, a, b);
             continue;
         }
+        else if (strncmp(cmd, "LOGOUT", 6) == 0)
+        {
+            handle_logout(sock, a);
+        }
+
         else if (strcmp(cmd, "FIND_MATCH") == 0 && parts >= 3)
         {
             char *username = a;
@@ -136,7 +142,6 @@ static void *client_thread(void *arg)
             send_logged(sock, "HISTORY_END\n");
         }
 
-
         else if (strcmp(cmd, "REACT") == 0 && parts >= 2)
         {
             // a = emoji
@@ -149,7 +154,33 @@ static void *client_thread(void *arg)
             gs_send_chat(sock, a);
             continue;
         }
+        else if (strcmp(cmd, "FRIEND_REQUEST") == 0 && parts == 3)
+        {
+            // a = from, b = to
+            handle_friend_request(sock, a, b);
+            continue;
+        }
 
+        else if (strcmp(cmd, "FRIEND_ACCEPT") == 0 && parts == 3)
+        {
+            // a = me, b = other
+            handle_friend_accept(sock, a, b);
+            continue;
+        }
+
+        else if (strcmp(cmd, "FRIEND_REJECT") == 0 && parts == 3)
+        {
+            // a = me, b = other
+            handle_friend_reject(sock, a, b);
+            continue;
+        }
+
+        else if (strcmp(cmd, "GET_FRIENDS_ONLINE") == 0 && parts >= 2)
+        {
+            // a = username
+            handle_get_friends_online(sock, a);
+            continue;
+        }
 
         else if (strcmp(cmd, "GET_ONLINE") == 0)
         {
