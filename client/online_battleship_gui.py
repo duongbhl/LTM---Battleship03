@@ -90,6 +90,7 @@ EMOTES = {
     ),
 }
 
+is_spectator = False
 
 class Button:
     def __init__(self, rect, text, font=font_text,
@@ -160,19 +161,38 @@ def render_scrolled(font, text, max_width, color):
     return surf
 
 
-def run_online_game(net, username, mode, send_find_match: bool = True):
+def run_online_game(net, username, mode, send_find_match:bool = True):
+    global is_spectator
+    sent_find_match = False
+
+    is_spectator = (mode=="spectator")
+    
+    if mode == "spectator":
+        phase = "spectating"
+        message = "Waiting for game data..."
+    else:
+        phase = "queue"
+        message = "Waiting for opponent..."
+        if send_find_match and not sent_find_match:
+            print("[CLIENT] SEND FIND_MATCH")
+            net.send(f"FIND_MATCH|{username}|{mode}")
+            sent_find_match = True
+
+    
     my_elo = "?"
     opponent_elo = "?"
 
-    phase = "queue"
-    message = "Waiting for opponent..."
+    # phase = "queue"
     message_color = TEXT
+    if mode != "spectator":
+        message = "Waiting for opponent..."
+    else:
+        message = "Waiting for game data..."
 
+    
     # Normal matchmaking flow: client asks server to find a match.
     # Some flows (e.g. friend challenge accepted) already have a session created
     # on the server; in that case we only wait for MATCH_FOUND.
-    if send_find_match:
-        net.send(f"FIND_MATCH|{username}|{mode}")
     # queue_started_at is managed by QUEUED / MATCH_FOUND messages below
 
 
@@ -183,10 +203,13 @@ def run_online_game(net, username, mode, send_find_match: bool = True):
 
 
     my_board = ["U"] * 100
+    
     enemy_board = ["U"] * 100
 
     # NEW — ships from server
     my_ships = ["0"] * 100
+    spec_ships_p1 = ["0"] * 100
+    spec_ships_p2 = ["0"] * 100
     show_my_ships = False
 
     result = None
@@ -224,7 +247,7 @@ def run_online_game(net, username, mode, send_find_match: bool = True):
     INPUT_Y = REAL_HEIGHT - 60 - 6 - INPUT_H
             
     # Queue timer
-    queue_started_at = None
+    queue_started_at = pygame.time.get_ticks()
     queue_elapsed = 0
 
     clock = pygame.time.Clock()
@@ -291,179 +314,255 @@ def run_online_game(net, username, mode, send_find_match: bool = True):
 
 
     running = True
+    game_session_ended = False
     while running:
-
         mouse_pos = pygame.mouse.get_pos()
 
         # RECEIVE MESSAGES
-        msg = net.read_nowait()
-        while msg is not None:
-            for line in msg.split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-
-                print("[CLIENT PARSED LINE]", line)
-                parts = line.split("|")
-                cmd = parts[0]
-
-                if cmd == "QUEUED":
-                    if phase == "queue":
-                        message = "Waiting for opponent..."
-                    if queue_started_at is None:
-                        queue_started_at = pygame.time.get_ticks()
-
-                elif cmd == "MATCH_FOUND":
-                    # (Re)start a match (also used for rematch)
-                    phase = "playing"
-                    result = None
-                    opponent_dc = False
-                    dc_countdown = 0
-                    dc_start_time = 0
-
-                    # reset boards/state
-                    my_board = ["U"] * 100
-                    enemy_board = ["U"] * 100
-                    my_ships = ["0"] * 100
-                    show_my_ships = False
-
-                    my_react = None
-                    opp_react = None
-                    show_react_panel = False
-
-                    chat_active = False
-                    chat_input = ""
-                    chat_lines = []
-
-                    rematch_requested = False
-                    rematch_prompt_open = False
-                    rematch_from_user = ""
-
-                    opponent = parts[1]
-                    opponent_elo = parts[2]
-                    my_turn = (parts[3] == "1")
-                    message = "Your turn!" if my_turn else "Opponent's turn..."
-                    message_color = GOOD if my_turn else TEXT
-                    # stop/reset queue timer
-                    queue_started_at = None
-                    queue_elapsed = 0
-                elif cmd == "MY_SHIPS":
-                    bitline = parts[1]
-                    for i in range(min(100, len(bitline))):
-                        my_ships[i] = bitline[i]
-
-                elif cmd == "YOUR_TURN":
-                    my_turn = True
-                    turn_started_at = pygame.time.get_ticks()
-                    message = "Your turn"
-                    message_color = GOOD
-                elif cmd == "OPPONENT_DISCONNECTED":
-                    opponent_dc = True
-                    dc_countdown = int(parts[1]) if len(parts) >= 2 else 10
-                    dc_start_time = pygame.time.get_ticks()
-                    message = f"Opponent disconnected. Auto-forfeit in {dc_countdown}s"
-                    message_color = BAD      
-                    turn_started_at = None                                                                                                                  
-                elif cmd == "OPPONENT_TURN":
-                    my_turn = False
-                    turn_started_at = pygame.time.get_ticks()
-                    message = "Opponent's turn"
-                    message_color = TEXT
-
-                elif cmd == "MOVE_RESULT":
-                    x = int(parts[1]); y = int(parts[2])
-                    idx = y * 10 + x
-
-                    hit_result = parts[3]
-                    status = parts[4].split("=")[-1]
-
-                    if hit_result == "HIT":
-                        enemy_board[idx] = "H"   # tạm gán hit
-
-                        # Nếu server báo tàu đã chìm
-                        if status == "SUNK":
-                            # server cần gửi thêm danh sách ô hull của tàu
-                            ship_cells = parts[5] if len(parts) >= 6 else ""
-                            # ví dụ ship_cells = "12,13,14,15"
-                            for pos in ship_cells.split(","):
-                                if pos.isdigit():
-                                    enemy_board[int(pos)] = "S"
-                    else:
-                        enemy_board[idx] = "M"
-                    if status == "WIN":
-                        phase = "gameover"
-                        result = "WIN"
-
-                elif cmd == "OPPONENT_MOVE":
-                    x = int(parts[1]); y = int(parts[2])
-                    idx = y * 10 + x
-                    my_board[idx] = "H" if parts[3] == "HIT" else "M"
-                    status = parts[4].split("=")[-1]
-                    if status == "LOSE":                                                                     
-                        phase = "gameover"
-                        result = "LOSE"
-
-                elif cmd == "MY_REACT":
-                    emoji = parts[1]
-                    my_react = emoji
-                    my_react_time = pygame.time.get_ticks()
-
-                elif cmd == "OPPONENT_REACT":
-                    emoji = parts[1]
-                    opp_react = emoji
-                    opp_react_time = pygame.time.get_ticks()
-
-                elif cmd == "CHAT":
-                    sender = parts[1]
-                    text = parts[2]
-                    chat_lines.append(f"[{sender}]: {text}")
-                    if len(chat_lines) > MAX_CHAT_LINES:
-                        chat_lines.pop(0)
-
-                elif cmd == "GAMEOVER":
-                    if len(parts) >= 2:
-                        phase = "gameover"
-                        result = parts[1]
-                        if result == "WIN":
-                            message = "You win!"
-                            message_color = GOOD
-                        else:
-                            message = "You lose!"
-                            message_color = BAD                                       
-
-                elif cmd == "REMATCH_REQUEST":
-                    # Server notifies that someone requested a rematch
-                    who = parts[1] if len(parts) >= 2 else ""
-                    if who == username:
-                        message = "Rematch requested. Waiting for opponent..."
-                        message_color = TEXT
-                        rematch_requested = True
-                    else:
-                        rematch_from_user = who
-                        rematch_prompt_open = True
-                        message = f"{who} wants a rematch!"
-                        message_color = TEXT
-
-                elif cmd == "REMATCH_ACCEPTED":
-                    who = parts[1] if len(parts) >= 2 else ""
-                    rematch_prompt_open = False
-                    rematch_requested = True
-                    if who == username:
-                        message = "You accepted the rematch. Starting..."
-                    else:
-                        message = f"{who} accepted the rematch. Starting..."
-                    message_color = TEXT
-
-                elif cmd == "REMATCH_DECLINED":
-                    who = parts[1] if len(parts) >= 2 else ""
-                    rematch_prompt_open = False
-                    rematch_requested = False
-                    if who == username:
-                        message = "You declined the rematch."
-                    else:
-                        message = f"{who} declined the rematch."
-                    message_color = TEXT
+        if  True:
             msg = net.read_nowait()
+            if msg:
+                for line in msg.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    print("[CLIENT PARSED LINE]", line)
+                    parts = line.split("|")
+                    cmd = parts[0]
+
+                    if cmd == "QUEUED":
+                        if phase != "queue":
+                            continue
+                        if phase == "queue":
+                            message = "Waiting for opponent..."
+                        if queue_started_at is None:
+                            queue_started_at = pygame.time.get_ticks()
+                    elif cmd == "SPECTATOR_START":
+                        phase = "playing"
+                        my_turn = False
+                        message = "Spectating match"
+                        message_color = TEXT
+                    elif cmd == "SPEC_BOARD":
+                        if phase != "playing":
+                            phase = "playing"
+                            my_turn = False
+                            message = "Spectating match"
+                            message_color = TEXT
+                        side = parts[1]
+                        data = parts[2]
+
+                        padded = list(data[:100])          # lấy tối đa 100
+                        if len(padded) < 100:
+                            padded += ["U"] * (100 - len(padded))
+
+                        if side == "P1":
+                            my_board = padded
+                        elif side == "P2":
+                            enemy_board = padded
+                    elif cmd == "SPEC_SHIPS":
+                        side = parts[1]
+                        bitline = parts[2]
+
+                        padded = list(bitline[:100])
+                        if len(padded) < 100:
+                            padded += ["0"] * (100 - len(padded))
+
+                        if side == "P1":
+                            spec_ships_p1 = padded
+                        elif side == "P2":
+                            spec_ships_p2 = padded
+
+                    elif cmd == "SPEC_TURN":
+                        if phase != "playing":
+                            phase = "playing"
+                            my_turn = False
+                            message = "Spectating match"
+                            message_color = TEXT
+                    elif cmd == "SPEC_MOVE":
+                        target = parts[1]   # P1/P2 = board bị bắn
+                        x = int(parts[2]); y = int(parts[3])
+                        idx = y * 10 + x
+                        hit = parts[4]
+
+                        board = my_board if target == "P1" else enemy_board
+                        board[idx] = "H" if hit == "HIT" else "M"
+                    
+                    elif cmd == "SPEC_GAMEOVER":
+                        winner = parts[1].split("=")[1]
+                        reason = parts[2].split("=")[1]
+
+                        phase = "gameover"
+                        result = winner
+                        message = f"Winner: {winner} ({reason})"
+                        message_color = GOOD
+                        game_session_ended = True
+                        running = False
+                    elif cmd == "MATCH_FOUND":
+                        opponent_dc = False 
+                        # (Re)start a match (also used for rematch)
+                        phase = "playing"
+                        result = None
+                        opponent_dc = False
+                        dc_countdown = 0
+                        dc_start_time = 0
+
+                        # reset boards/state
+                        my_board = ["U"] * 100
+                        enemy_board = ["U"] * 100
+                        my_ships = ["0"] * 100
+                        show_my_ships = False
+    
+                        my_react = None
+                        opp_react = None
+                        show_react_panel = False
+
+                        chat_active = False
+                        chat_input = ""
+                        chat_lines = []
+
+                        rematch_requested = False
+                        rematch_prompt_open = False
+                        rematch_from_user = ""
+
+                        opponent = parts[1]
+                        opponent_elo = parts[2]
+                        my_turn = (parts[3] == "1")
+                        message = "Your turn!" if my_turn else "Opponent's turn..."
+                        message_color = GOOD if my_turn else TEXT
+                    # stop/reset queue timer
+                        send_find_match=True  # khoa match
+                        queue_started_at = None
+                        queue_elapsed = 0
+                    elif cmd == "MY_SHIPS":
+                        bitline = parts[1]
+                        for i in range(min(100, len(bitline))):
+                            my_ships[i] = bitline[i]
+
+                    elif cmd == "YOUR_TURN":
+                        opponent_dc = False 
+                        my_turn = True
+                        turn_started_at = pygame.time.get_ticks()
+                        message = "Your turn"
+                        message_color = GOOD
+                    elif cmd == "OPPONENT_DISCONNECTED":
+                        opponent_dc = True
+                        dc_countdown = int(parts[1]) if len(parts) >= 2 else 10
+                        dc_start_time = pygame.time.get_ticks()
+                        message = f"Opponent disconnected. Auto-forfeit in {dc_countdown}s"
+                        message_color = BAD                                                                                                                     
+                    elif cmd == "OPPONENT_TURN":
+                        opponent_dc = False 
+                        my_turn = False
+                        turn_started_at = pygame.time.get_ticks()
+                        message = "Opponent's turn"
+                        message_color = TEXT
+
+                    elif cmd == "MOVE_RESULT":
+                        x = int(parts[1]); y = int(parts[2])
+                        idx = y * 10 + x
+
+                        hit_result = parts[3]
+                        status = parts[4].split("=")[-1]
+
+                        if hit_result == "HIT":
+                            enemy_board[idx] = "H"   # tạm gán hit
+
+                            # Nếu server báo tàu đã chìm
+                            if status == "SUNK":
+                                # server cần gửi thêm danh sách ô hull của tàu
+                                ship_cells = parts[5] if len(parts) >= 6 else ""
+                                # ví dụ ship_cells = "12,13,14,15"
+                                for pos in ship_cells.split(","):
+                                    if pos.isdigit():
+                                        enemy_board[int(pos)] = "S"
+                        else:
+                            enemy_board[idx] = "M"
+                        if status == "WIN":
+                            phase = "gameover"
+                            result = "WIN"
+
+                    elif cmd == "OPPONENT_MOVE":
+                        opponent_dc = False 
+                        x = int(parts[1]); y = int(parts[2])
+                        idx = y * 10 + x
+                        my_board[idx] = "H" if parts[3] == "HIT" else "M"
+                        status = parts[4].split("=")[-1]
+                        if status == "LOSE":                                                                     
+                            phase = "gameover"
+                            result = "LOSE"
+
+                    elif cmd == "MY_REACT":
+                        emoji = parts[1]
+                        my_react = emoji
+                        my_react_time = pygame.time.get_ticks()
+
+                    elif cmd == "OPPONENT_REACT":
+                        emoji = parts[1]
+                        opp_react = emoji
+                        opp_react_time = pygame.time.get_ticks()
+
+                    elif cmd == "CHAT":
+                        sender = parts[1]
+                        text = parts[2]
+                        chat_lines.append(f"[{sender}]: {text}")
+                        if len(chat_lines) > MAX_CHAT_LINES:
+                            chat_lines.pop(0)
+
+                    elif cmd == "GAMEOVER":
+                        if len(parts) >= 2:
+                            phase = "gameover"
+                            result = parts[1]
+                            if result == "WIN":
+                                message = "You win!"
+                                message_color = GOOD
+                            else:
+                                message = "You lose!"
+                                message_color = BAD
+                                
+                            
+                            
+                            game_session_ended = True
+                            # running = False                                       
+    
+                    elif cmd == "REMATCH":
+                    # Server notifies that someone requested a rematch
+                        who = parts[1] if len(parts) >= 2 else ""
+                        if who == username:
+                            message = "Rematch requested. Waiting for opponent..."
+                            message_color = TEXT
+                            rematch_requested = True
+                        else:
+                            rematch_from_user = who
+                            rematch_prompt_open = True
+                            message = f"{who} wants a rematch!"
+                            message_color = TEXT
+
+                    elif cmd == "REMATCH_ACCEPTED":
+                        who = parts[1] if len(parts) >= 2 else ""
+                        rematch_prompt_open = False
+                        rematch_requested = True
+                        if who == username:
+                            message = "You accepted the rematch. Starting..."
+                        else:
+                            message = f"{who} accepted the rematch. Starting..."
+                            message_color = TEXT
+
+                    elif cmd == "REMATCH_DECLINED":
+                        who = parts[1] if len(parts) >= 2 else ""
+                        rematch_prompt_open = False
+                        rematch_requested = False
+                        if who == username:
+                            message = "You declined the rematch."
+                        else:
+                            message = f"{who} declined the rematch."
+                            message_color = TEXT
+                            msg = net.read_nowait()
+
+
+
+
+
 
         # QUEUE TIMER
         if phase.startswith("queue") and queue_started_at:
@@ -482,7 +581,8 @@ def run_online_game(net, username, mode, send_find_match: bool = True):
                 elif phase == "playing":
                     net.send(f"SURRENDER|{username}")
                     phase = "gameover"
-                    result = "LOSE"
+                    # result = "LOSE"
+                    result = None
                     message = "You surrendered!"
                     message_color = BAD
                 elif phase == "gameover":
@@ -521,6 +621,7 @@ def run_online_game(net, username, mode, send_find_match: bool = True):
                 if exit_button.clicked(ev):
                     # --- Not in game yet → Back to menu ---
                     if phase in ("queue_wait_send", "queue"):
+                        net.send("LEAVE_QUEUE")
                         net.send("CANCEL_QUEUE")
                         running = False
 
@@ -528,12 +629,15 @@ def run_online_game(net, username, mode, send_find_match: bool = True):
                     elif phase == "playing":
                         net.send(f"SURRENDER|{username}")
                         phase = "gameover"
-                        result = "LOSE"
+                        # result = "LOSE"
+                        result = None
                         message = "You surrendered!"
                         message_color = BAD
 
                     # --- After match → Back to menu ---
                     elif phase == "gameover":
+                        net.send("LEAVE_GAME")
+                        game_session_ended = True
                         running = False
 
                 # Rematch prompt response (accept/decline)
@@ -577,9 +681,13 @@ def run_online_game(net, username, mode, send_find_match: bool = True):
 
 
                 if phase in ("playing", "gameover") and show_button.clicked(ev):
+                    if is_spectator:
+                        turn_text = "Spectating"
                     show_my_ships = not show_my_ships
 
                 if phase == "playing" and my_turn:
+                    if is_spectator:
+                        continue  # spectators cannot make moves
                     click_x, click_y = ev.pos
                     gx, gy = RIGHT_GRID_X, GRID_Y
                     if gx <= mouse_pos[0] < gx + GRID_W and gy <= mouse_pos[1] < gy + GRID_H:
@@ -648,20 +756,42 @@ def run_online_game(net, username, mode, send_find_match: bool = True):
         if phase in ("playing", "gameover"):
             # draw my board
             draw_grid(my_board, LEFT_GRID_X, GRID_Y, "Your board")
+            # draw enemy board
+            draw_grid(enemy_board, RIGHT_GRID_X, GRID_Y, "Enemy board")
 
             # SHOW SHIPS
             if show_my_ships:
-                for i in range(100):
-                    if my_ships[i] == "1":   
-                        r = i // 10
-                        c = i % 10
-                        rx = LEFT_GRID_X + c * GRID_SIZE
-                        ry = GRID_Y + r * GRID_SIZE
-                        pygame.draw.rect(SCREEN, SHIP_COLOR,
+                if is_spectator:
+                    # P1 ships (left board)
+                    for i in range(100):
+                        if spec_ships_p1[i] == "1":
+                            r = i // 10
+                            c = i % 10
+                            rx = LEFT_GRID_X + c * GRID_SIZE
+                            ry = GRID_Y + r * GRID_SIZE
+                            pygame.draw.rect(SCREEN, SHIP_COLOR,
+                                 (rx, ry, GRID_SIZE, GRID_SIZE), 0)
+
+                    # P2 ships (right board)
+                    for i in range(100):
+                        if spec_ships_p2[i] == "1":
+                            r = i // 10
+                            c = i % 10
+                            rx = RIGHT_GRID_X + c * GRID_SIZE
+                            ry = GRID_Y + r * GRID_SIZE
+                            pygame.draw.rect(SCREEN, SHIP_COLOR,
+                                 (rx, ry, GRID_SIZE, GRID_SIZE), 0)
+                else:
+                    for i in range(100):
+                        if my_ships[i] == "1":   
+                            r = i // 10
+                            c = i % 10
+                            rx = LEFT_GRID_X + c * GRID_SIZE
+                            ry = GRID_Y + r * GRID_SIZE
+                            pygame.draw.rect(SCREEN, SHIP_COLOR,
                                          (rx, ry, GRID_SIZE, GRID_SIZE), 0)
 
-            # draw enemy board
-            draw_grid(enemy_board, RIGHT_GRID_X, GRID_Y, "Enemy board")
+            
 
             # ---- CHAT BOX ----
             CHAT_W = 360
@@ -721,15 +851,27 @@ def run_online_game(net, username, mode, send_find_match: bool = True):
 
 
         else:
-            center_msg = "Finding opponent..." if phase.startswith("queue") else "Connecting..."
+            if phase.startswith("queue"):
+                center_msg = "Finding opponent..."
+            elif phase == "spectating":
+                center_msg = "Watching match..."
+            else:
+                center_msg = "Connecting..."
             SCREEN.blit(font_title.render(center_msg, True, (200, 200, 255)),
                         (REAL_WIDTH//2 - 200, REAL_HEIGHT//2 - 40))
 
         if phase == "gameover":
-            col = GOOD if result == "WIN" else BAD
-            rs = font_title.render(f"Result: {result}", True, col)
+            if is_spectator:
+                rs = font_title.render(f"Winner: {result}", True, GOOD)
+            else:
+                col = GOOD if result == "WIN" else BAD
+                rs = font_title.render(f"Result: {result}", True, col)
             SCREEN.blit(rs, rs.get_rect(center=(REAL_WIDTH//2,
                                                 REAL_HEIGHT - BOTTOM_BANNER_HEIGHT//2)))
+            # After game → Back to Menu
+            exit_button.text = "Back to Menu"
+            exit_button.color = (90, 110, 160)
+            exit_button.hover = (120, 140, 190)
         exit_button.update_hover(mouse_pos)
 
         if phase in ("queue_wait_send", "queue"):
@@ -743,12 +885,6 @@ def run_online_game(net, username, mode, send_find_match: bool = True):
             exit_button.text = "Surrender"
             exit_button.color = (200, 70, 70)
             exit_button.hover = (230, 100, 100)
-
-        elif phase == "gameover":
-            # After game → Back to Menu
-            exit_button.text = "Back to Menu"
-            exit_button.color = (90, 110, 160)
-            exit_button.hover = (120, 140, 190)
 
         if show_react_panel:
             pygame.draw.rect(

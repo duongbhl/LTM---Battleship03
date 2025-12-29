@@ -5,6 +5,7 @@
 #include "../include/database.h"
 #include "../include/utils.h"
 #include "../include/friend.h"
+#include "../include/online_users.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,7 @@ static void *afk_watcher(void *arg)
     while (1)
     {
         sleep(1);
+        online_users_tick();
         gs_tick_afk();
         gs_tick_turn_timeout();
     }
@@ -101,6 +103,16 @@ static void *client_thread(void *arg)
 
         else if (strcmp(cmd, "FIND_MATCH") == 0 && parts >= 3)
         {
+            if (mm_player_waiting(sock))
+            {
+                send_logged(sock, "ERROR|Already in queue\n");
+                continue;
+            }
+            if (gs_player_in_game(sock))
+            {
+                send_logged(sock, "ERROR|Still in game\n");
+                continue;
+            }
             char *username = a;
             char *mode = b; // "rank" hoặc "open"
 
@@ -124,23 +136,50 @@ static void *client_thread(void *arg)
 
         else if (strcmp(cmd, "MOVE") == 0 && parts == 3)
         {
+            Game *gs = gs_find_by_player(sock);
+            if (!gs)
+                return;
+
+            // ❌ spectator không được move
+            if (!gs_is_player(gs, sock))
+            {
+                return;
+            }
             int x = atoi(a);
             int y = atoi(b);
             gs_handle_move(sock, x, y);
             continue;
         }
+
         else if (strcmp(cmd, "FORFEIT") == 0)
         {
             printf("[Server] %d sent FORFEIT\n", sock);
             gs_forfeit(sock);
             continue;
         }
+
         else if (strcmp(cmd, "SURRENDER") == 0)
         {
             printf("[Server] %d sent SURRENDER\n", sock);
             gs_forfeit(sock);
             continue;
         }
+
+        else if (strcmp(cmd, "LEAVE_GAME") == 0)
+        {
+            gs_handle_leave(sock);
+        }
+        else if (strcmp(cmd, "LEAVE_QUEUE") == 0)
+        {
+            mm_remove_socket(sock);
+
+            OnlineUser *u = online_user_by_sock(sock);
+            if (u && u->state == STATE_QUEUE)
+                u->state = STATE_IDLE;
+
+            send_logged(sock, "LEFT_QUEUE\n");
+        }
+
 
         else if (strcmp(cmd, "REMATCH") == 0)
         {
@@ -247,6 +286,14 @@ static void *client_thread(void *arg)
             snprintf(msg, sizeof(msg), "ONLINE_LIST|%s\n", list);
             send_logged(sock, msg);
             continue;
+        }
+        else if (strcmp(cmd, "WATCH_FRIEND") == 0 && parts == 2)
+        {
+            handle_watch_friend(sock, a);
+        }
+        else if (strcmp(cmd, "PING") == 0)
+        {
+            online_user_update_ping(sock);
         }
         else
         {

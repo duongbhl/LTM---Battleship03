@@ -53,7 +53,7 @@ current_password = None  # giữ password tạm trong session để login socket
 is_logged_in = False
 session_sock = None
 
-online_users = []
+online_users = {}  # dict[str, str]  tên user -> trạng thái ("ONLINE", "INGAME")
 online_popup_open = False
 last_online_fetch = 0
 
@@ -78,6 +78,7 @@ search_status_text = None
 search_status_color = None
 search_status_time = 0
 SEARCH_STATUS_DURATION = 3
+
 
 # ----- FRIEND CHALLENGE (ELO) STATE -----
 challenge_requests = []         # list[str] - users who challenged you
@@ -119,18 +120,15 @@ class Button:
 
 
 def launch_game(mode, send_find_match: bool = True):
-    print("DEBUG: launch_game() called")   # PRINT 1
+    
 
     from online_battleship_gui import run_online_game
-    print("DEBUG: imported online_battleship_gui")  # PRINT 2
+    
 
     global SCREEN, current_user, current_password
 
-    print("DEBUG: current_user =", current_user)    # PRINT 3
-    print("DEBUG: current_pass =", current_password)    # PRINT 3
-
     run_online_game(session_sock, current_user, mode, send_find_match=send_find_match)
-    print("DEBUG: returned from run_online_game")   # PRINT 4
+   
 
 
 def send_auth_request(command, username, password):
@@ -141,7 +139,7 @@ def send_auth_request(command, username, password):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5)
-        sock.connect(("127.0.0.1", 5050)) 
+        sock.connect(("10.172.35.181", 5050)) 
         
         request = f"{command}|{username}|{password}\n"
         sock.sendall(request.encode())
@@ -786,13 +784,18 @@ def friend_notifications_screen():
         pygame.display.flip()
         clock.tick(60)
 
+
 def friends_online_screen():
-    global online_users, session_sock, current_user
+    global online_users, session_sock
+    waiting_watch = False
+    watch_target = None
+    session_sock, current_user
     global challenge_requests, challenge_popup_open
     global challenge_status_text, challenge_status_color, challenge_status_time
     global challenge_decline_popup_open, challenge_decline_popup_by
 
     clock = pygame.time.Clock()
+    running = True
 
     back_btn = Button(
         (30, MENU_HEIGHT - 80, 140, 44),
@@ -825,16 +828,39 @@ def friends_online_screen():
     scroll_offset = 0
     running = True
     while running:
+        if waiting_watch:
+            msg = session_sock.read_nowait()
+            while msg:
+                if msg.startswith("SPECTATOR_START"):
+                    launch_game("spectator")
+                    return   # ❗ THOÁT HẲN VÀO GAME
+
+                elif msg.startswith("ERROR|"):
+                    waiting_watch = False
+                    watch_target = None
+                    break
+                
+                msg = session_sock.read_nowait()
         SCREEN.fill(BG_COLOR)
         mouse_pos = pygame.mouse.get_pos()
+        
+        
 
+        # ===== TITLE =====
         # ===== Socket receive (so invites & match start are handled even inside this screen) =====
         if session_sock:
             msg = session_sock.read_nowait()
             while msg:
                 if msg.startswith("FRIENDS_ONLINE|"):
-                    users = msg.split("|", 1)[1].strip(",")
-                    online_users = users.split(",") if users else []
+                    online_users = {}
+                    payload = msg.split("|", 1)[1]
+
+                    for entry in payload.split(";"):
+                        if not entry:
+                            continue
+                        name, state = entry.split("|")
+                        online_users[name] = state
+                    
 
                 elif msg.startswith("CHALLENGE_INVITE|"):
                     sender = msg.split("|", 1)[1]
@@ -875,7 +901,7 @@ def friends_online_screen():
                     session_sock.push_front(msg)
                     challenge_popup_open = False
                     challenge_requests.clear()
-                    launch_game("rank", send_find_match=False)
+                    # launch_game("rank", send_find_match=False)
                     return
 
                 else:
@@ -894,54 +920,94 @@ def friends_online_screen():
         title = font_title.render("FRIENDS ONLINE", True, TITLE_COLOR)
         SCREEN.blit(title, title.get_rect(center=(MENU_WIDTH // 2, 80)))
 
+        # ===== CONTAINER =====
         box_w, box_h = 640, 500
         box_x = (MENU_WIDTH - box_w) // 2
         box_y = 140
 
-        pygame.draw.rect(SCREEN, (40, 50, 70), (box_x, box_y, box_w, box_h), border_radius=14)
-        pygame.draw.rect(SCREEN, (120, 150, 200), (box_x, box_y, box_w, box_h), 2, border_radius=14)
+        pygame.draw.rect(
+            SCREEN, (40, 50, 70),
+            (box_x, box_y, box_w, box_h),
+            border_radius=14
+        )
+        pygame.draw.rect(
+            SCREEN, (120, 150, 200),
+            (box_x, box_y, box_w, box_h),
+            2, border_radius=14
+        )
 
-        # Status message (challenge sent/declined etc.)
-        if challenge_status_text and time.time() - challenge_status_time < CHALLENGE_STATUS_DURATION:
-            st = font_small.render(challenge_status_text, True, challenge_status_color)
-            SCREEN.blit(st, (box_x + 30, box_y - 36))
+        # ===== LIST =====
+        LINE_H = 44
+        ICON_R = 6
+        BTN_W, BTN_H = 80, 28
 
-        # Friends list + challenge buttons
-        challenge_buttons = []  # list[(username, Button)]
+        challenge_buttons = [] 
         if not online_users:
-            empty = font_small.render("No friends online", True, (160, 160, 180))
-            SCREEN.blit(empty, empty.get_rect(center=(MENU_WIDTH // 2, box_y + box_h // 2)))
+            empty = font_small.render(
+                "No friends online", True, (160, 160, 180)
+            )
+            SCREEN.blit(
+                empty,
+                empty.get_rect(center=(MENU_WIDTH // 2, box_y + box_h // 2))
+            )
         else:
-            LINE_H = 40
-            ICON_R = 6
-
             y = box_y + 30
-            for u in online_users[:10]:
+
+            for name, state in online_users.items():
+                if y > box_y + box_h - LINE_H:
+                    break
+
+                # online icon
                 pygame.draw.circle(
                     SCREEN,
-                    (120, 255, 120),           # xanh online
-                    (box_x + 24, y + LINE_H//2),
+                    (120, 255, 120),
+                    (box_x + 24, y + LINE_H // 2),
                     ICON_R
                 )
-                name_surf = font_small.render(u, True, (230, 230, 255))
+
+                # name
+                name_surf = font_small.render(name, True, (230, 230, 255))
                 SCREEN.blit(name_surf, (box_x + 40, y + 10))
 
+                # state text
+                state_color = (120, 255, 120) if state == "INGAME" else (180, 180, 180)
+                state_text = "In Game" if state == "INGAME" else "Online"
+                st = font_small.render(state_text, True, state_color)
+                SCREEN.blit(st, (box_x + 200, y + 10))
                 
+                btn_y = y + (LINE_H - BTN_H) // 2
+                watch_x = box_x + box_w - BTN_W - 20
+                challenge_x = watch_x - BTN_W - 10
+                
+                
+                 # ===== CHALLENGE BUTTON =====
+                challenge_btn = Button((challenge_x, btn_y, BTN_W, BTN_H), "Challenge", base_font=font_small, color=(90, 110, 160), hover_color=(120, 140, 190))
+                challenge_btn.is_hovered(mouse_pos)
+                challenge_btn.draw(SCREEN)
+                challenge_buttons.append((name, challenge_btn))
 
+                # WATCH BUTTON (chỉ khi INGAME)
+                if state == "INGAME":
+                    watch_rect = pygame.Rect(watch_x, btn_y, BTN_W, BTN_H)
+                    hover = watch_rect.collidepoint(mouse_pos)
+                    
+                    pygame.draw.rect(SCREEN, (90, 160, 240) if hover else (70, 130, 210), watch_rect, border_radius=6)
 
-                btn = Button(
-                    (box_x + box_w - 190, y - 8, 160, 34),
-                    "Challenge",
-                    base_font=font_small,
-                    color=(90, 110, 160),
-                    hover_color=(120, 140, 190)
-                )
-                btn.is_hovered(mouse_pos)
-                btn.draw(SCREEN)
-                challenge_buttons.append((u, btn))
+                    wtxt = font_small.render("Watch", True, WHITE)
+                    SCREEN.blit(wtxt, wtxt.get_rect(center=watch_rect.center))
+
+                    if hover and pygame.mouse.get_pressed()[0]:
+                        session_sock.send(f"WATCH_FRIEND|{name}")
+                        waiting_watch = True
+                        watch_target = name
 
                 y += LINE_H
+            
+            if waiting_watch:
+                info = font_small.render(f"Watching {watch_target}...",True, (180, 220, 255))
+                SCREEN.blit(info, (box_x + 30, box_y + box_h - 30))
 
+        # ===== BACK BUTTON =====
         back_btn.is_hovered(mouse_pos)
         back_btn.draw(SCREEN)
         # ===== Challenge popup modal =====
@@ -1044,7 +1110,8 @@ def friends_online_screen():
         # ===== Events =====
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
-                pygame.quit(); exit()
+                pygame.quit()
+                exit()
             # ===== Declined popup is modal =====
             if challenge_decline_popup_open and challenge_decline_popup_by:
                 if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
@@ -1307,11 +1374,17 @@ def main_menu():
             msg = session_sock.read_nowait()
             while msg:
                 if msg.startswith("FRIENDS_ONLINE|"):
-                    users = msg.split("|", 1)[1].strip(",")
-                    online_users = users.split(",") if users else []
+                    online_users = {}
+                    payload = msg.split("|", 1)[1]
+                    
+                    for entry in payload.split(";"):
+                        if not entry:
+                            continue
+                        name, state = entry.split("|")
+                        online_users[name] = state
+                        
                     online_button.text = f"Friends Online: {len(online_users)}"
-
-                elif msg.startswith("FRIEND_INVITES|"):
+                elif msg.startswith("FRIEND_INVITE|"):
                     users = msg.split("|", 1)[1].strip(",")
                     for u in users.split(","):
                         if u and u not in friend_invites:
@@ -1375,7 +1448,20 @@ def main_menu():
                     search_status_text = f"Friend invited: {target}"
                     search_status_color = (120, 255, 120)
                     search_status_time = time.time()
+                elif msg.startswith("FRIENDS_ONLINE|"):
+                    online_users = {}
+                    payload = msg.split("|", 1)[1]
+                    for entry in payload.split(";"):
+                        if not entry:
+                            continue
+                        name, state = entry.split("|")
+                        online_users[name] = state
+                elif msg.startswith("WATCH_OK"):
+                    launch_game("spectator")
+                    return
 
+
+        
                 elif msg.startswith("ERROR|"):
                     search_status_text = msg.split("|", 1)[1]
                     search_status_color = (255, 120, 120)

@@ -2,48 +2,34 @@
 #include "../include/utils.h"
 #include "../include/elo.h"
 #include "../include/database.h"
+#include "../include/server.h"
+#include "../include/online_users.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
 
-#define MAX_GAMES 100
-#define BOARD_N 10
-#define CELLS (BOARD_N * BOARD_N)
-
-typedef struct
-{
-    int p1, p2;
-    char user1[32], user2[32];
-    int ranked;
-    int elo1, elo2;
-
-    int turn;
-    int alive;
-    time_t turn_started_at;   // thời điểm bắt đầu lượt hiện tại
-
-    int dc_sock;
-    time_t dc_expire;
-
-    unsigned char ships1[CELLS];
-    unsigned char ships2[CELLS];
-
-    unsigned char shots_by_p1[CELLS];
-    unsigned char shots_by_p2[CELLS];
-
-    int remaining1;
-    int remaining2;
-
-    /* Rematch handshake (after GAMEOVER) */
-    int rematch1;
-    int rematch2;
-} Game;
-
 static Game games[MAX_GAMES];
 static int game_count = 0;
 
 /* Helpers */
+static Game *alloc_game_slot(void)
+{
+    // reuse slot đã kết thúc
+    for (int i = 0; i < game_count; i++)
+    {
+        if (!games[i].alive && games[i].p1 == 0 && games[i].p2 == 0)
+            return &games[i];
+    }
+
+    // mở slot mới nếu còn chỗ
+    if (game_count < MAX_GAMES)
+        return &games[game_count++];
+
+    return NULL;
+}
+
 static int idx_of(int x, int y) { return y * BOARD_N + x; }
 
 static void clear_board(unsigned char b[CELLS], unsigned char v)
@@ -191,7 +177,6 @@ int gs_get_opponent_sock(int sock)
     return (sock == g->p1) ? g->p2 : g->p1;
 }
 
-
 int gs_player_in_game(int sock)
 {
     return (find_game(sock) != NULL);
@@ -202,8 +187,6 @@ int gs_game_alive(int sock)
     Game *g = find_game(sock);
     return (g && g->alive);
 }
-
-/* ===== API ===== */
 
 // Find all contiguous ship cells belonging to the same ship
 static int collect_ship_cells(unsigned char ships[], int idx, int out_cells[], int *out_count)
@@ -259,18 +242,23 @@ static int ship_is_sunk(unsigned char ships[], int cells[], int count)
     return 1;
 }
 
+// Create a new game session
 void gs_create_session(int s1, const char *u1, int e1, int s2, const char *u2, int e2, int ranked)
 {
-    if (game_count >= MAX_GAMES)
+    Game *g = alloc_game_slot();
+    if (!g)
     {
         send_logged(s1, "ERROR|Server full\n");
         send_logged(s2, "ERROR|Server full\n");
         return;
     }
 
-    Game *g = &games[game_count++];
+    /* reset sạch struct để tránh dính game cũ */
+    memset(g, 0, sizeof(*g));
+
     g->p1 = s1;
     g->p2 = s2;
+
     strncpy(g->user1, u1, 31);
     strncpy(g->user2, u2, 31);
     g->user1[31] = 0;
@@ -289,6 +277,7 @@ void gs_create_session(int s1, const char *u1, int e1, int s2, const char *u2, i
 
     g->dc_sock = 0;
     g->dc_expire = 0;
+    g->spectator_count = 0;
 
     clear_board(g->shots_by_p1, 'U');
     clear_board(g->shots_by_p2, 'U');
@@ -296,7 +285,7 @@ void gs_create_session(int s1, const char *u1, int e1, int s2, const char *u2, i
     randomize_fleet(g->ships1, &g->remaining1);
     randomize_fleet(g->ships2, &g->remaining2);
 
-    /* Send MATCH_FOUND */
+    /* ===== MATCH_FOUND ===== */
     char msg1[128], msg2[128];
     snprintf(msg1, sizeof(msg1), "MATCH_FOUND|%s|%d|1\n",
              g->user2, g->elo2);
@@ -306,8 +295,9 @@ void gs_create_session(int s1, const char *u1, int e1, int s2, const char *u2, i
     send_logged(g->p1, msg1);
     send_logged(g->p2, msg2);
 
-    // Send ships to each player */
-    char buf1[200], buf2[200], send1[240], send2[240];
+    /* ===== SEND SHIPS ===== */
+    char buf1[CELLS + 1], buf2[CELLS + 1];
+    char send1[240], send2[240];
 
     for (int i = 0; i < CELLS; i++)
     {
@@ -327,6 +317,7 @@ void gs_create_session(int s1, const char *u1, int e1, int s2, const char *u2, i
     send_logged(g->p2, "OPPONENT_TURN\n");
 }
 
+// Handle a player's move
 void gs_handle_move(int sock, int x, int y)
 {
     Game *g = find_game(sock);
@@ -343,6 +334,8 @@ void gs_handle_move(int sock, int x, int y)
     }
 
     int is_p1 = (sock == g->p1);
+    const char *shooter_side = is_p1 ? "P1" : "P2";
+    const char *target_side = is_p1 ? "P2" : "P1";
     int me_turn = is_p1 ? 1 : 2;
     int enemy_sock = is_p1 ? g->p2 : g->p1;
 
@@ -376,12 +369,9 @@ void gs_handle_move(int sock, int x, int y)
         my_shots[idx] = 'H';
         (*enemy_remaining)--;
 
-        // detect ship's full segment
         collect_ship_cells(enemy_ships, idx, cells, &count);
-        int sunk = ship_is_sunk(enemy_ships, cells, count);
-        result = sunk ? "SUNK" : "HIT";
+        result = ship_is_sunk(enemy_ships, cells, count) ? "SUNK" : "HIT";
     }
-
     else
     {
         my_shots[idx] = 'M';
@@ -395,11 +385,12 @@ void gs_handle_move(int sock, int x, int y)
     {
         status_me = "WIN";
         status_enemy = "LOSE";
-        g->alive = 0;
+        /* game will be finished after sending move results */
     }
 
     char msg[256];
 
+    /* ===== PLAYER ===== */
     if (strcmp(result, "SUNK") == 0)
     {
         char list[128] = "";
@@ -410,13 +401,12 @@ void gs_handle_move(int sock, int x, int y)
             strcat(list, t);
         }
         if (count > 0)
-            list[strlen(list) - 1] = 0; // remove last comma
+            list[strlen(list) - 1] = 0;
 
         snprintf(msg, sizeof(msg),
                  "MOVE_RESULT|%d|%d|HIT|STATUS=SUNK|%s\n",
                  x, y, list);
     }
-
     else
     {
         snprintf(msg, sizeof(msg),
@@ -425,6 +415,7 @@ void gs_handle_move(int sock, int x, int y)
     }
     send_logged(sock, msg);
 
+    /* ===== ENEMY ===== */
     if (strcmp(result, "SUNK") == 0)
     {
         char list[128] = "";
@@ -434,13 +425,13 @@ void gs_handle_move(int sock, int x, int y)
             sprintf(t, "%d,", cells[i]);
             strcat(list, t);
         }
-        if (count > 0) list[strlen(list) - 1] = 0;
+        if (count > 0)
+            list[strlen(list) - 1] = 0;
 
         snprintf(msg, sizeof(msg),
                  "OPPONENT_MOVE|%d|%d|HIT|STATUS=SUNK|%s\n",
                  x, y, list);
     }
-
     else
     {
         snprintf(msg, sizeof(msg),
@@ -449,83 +440,105 @@ void gs_handle_move(int sock, int x, int y)
     }
     send_logged(enemy_sock, msg);
 
-    if (!g->alive)
+    /* ===== SPECTATORS =====
+        gửi TARGET_SIDE để spectator update đúng board bị bắn */
+    if (strcmp(result, "SUNK") == 0)
     {
-        if (g->ranked)
+        char list[128] = "";
+        for (int i = 0; i < count; i++)
         {
-            int Ra = g->elo1;
-            int Rb = g->elo2;
-            int newRa, newRb;
-
-            if (is_p1)
-            {
-                elo_update_pair(Ra, Rb, 1, 32, &newRa, &newRb);
-                db_set_elo(g->user1, newRa);
-                db_set_elo(g->user2, newRb);
-
-                db_add_history(g->user1, g->user2, "WIN", newRa - Ra);
-                db_add_history(g->user2, g->user1, "LOSE", newRb - Rb);
-            }
-            else
-            {
-                elo_update_pair(Rb, Ra, 1, 32, &newRb, &newRa);
-                db_set_elo(g->user1, newRa);
-                db_set_elo(g->user2, newRb);
-
-                db_add_history(g->user2, g->user1, "WIN", newRb - Rb);
-                db_add_history(g->user1, g->user2, "LOSE", newRa - Ra);
-            }
+            char t[16];
+            sprintf(t, "%d,", cells[i]);
+            strcat(list, t);
         }
+        if (count > 0)
+            list[strlen(list) - 1] = 0;
 
-        if (is_p1)
-        {
+        snprintf(msg, sizeof(msg),
+                 "SPEC_MOVE|%s|%d|%d|HIT|STATUS=SUNK|%s\n",
+                 target_side, x, y, list);
+    }
+    else
+    {
+        snprintf(msg, sizeof(msg),
+                 "SPEC_MOVE|%s|%d|%d|%s|STATUS=NONE\n",
+                 target_side, x, y, result);
+    }
+    send_to_spectators(g, msg);
+    /* ===== GAME OVER ===== */
+    // if (!g->alive)
+    // {
+    //     gs_finish_game(g, sock, "SINK_ALL");
+    //     return;
+    // }
 
-            db_add_history(g->user1, g->user2, "WIN", 0);
-            db_add_history(g->user2, g->user1, "LOSE", 0);
-        }
-        else
-        {
-
-            db_add_history(g->user2, g->user1, "WIN", 0);
-            db_add_history(g->user1, g->user2, "LOSE", 0);
-        }
-
-        send_logged(sock, "GAMEOVER|WIN\n");
-        send_logged(enemy_sock, "GAMEOVER|LOSE\n");
+    /* ===== GAME OVER ===== */
+    if (*enemy_remaining <= 0)
+    {
+        gs_finish_game(g, sock, "SINK_ALL");
         return;
     }
+
+    /* ===== TURN LOGIC ===== */
+    g->turn_started_at = time(NULL);
 
     if (!is_hit)
     {
         g->turn = (g->turn == 1 ? 2 : 1);
-        g->turn_started_at = time(NULL);   
+
         send_logged(sock, "OPPONENT_TURN\n");
         send_logged(enemy_sock, "YOUR_TURN\n");
+
+        snprintf(msg, sizeof(msg),
+                 "SPEC_TURN|%s\n",
+                 g->turn == 1 ? "P1" : "P2");
+        send_to_spectators(g, msg);
     }
     else
     {
-        g->turn_started_at = time(NULL); 
         send_logged(sock, "YOUR_TURN\n");
         send_logged(enemy_sock, "OPPONENT_TURN\n");
     }
 }
 
+// Handle player disconnect
 void gs_handle_disconnect(int sock)
 {
-    Game *g = find_game(sock);
-    if (!g || g->alive == 0)
+    OnlineUser *c = online_user_by_sock(sock);
+    if (!c)
         return;
 
-    g->dc_sock = sock;
-    g->dc_expire = time(NULL) + 30;
+    Game *g = find_game(sock);
+    if (!g || !g->alive)
+        return;
+
+    // Đã có DC đang chờ xử → bỏ qua
+    if (g->dc_sock != 0)
+        return;
 
     int other = (sock == g->p1 ? g->p2 : g->p1);
 
+    // 🔴 ĐÁNH DẤU DC, CHƯA XỬ THUA NGAY
+    g->dc_sock = sock;
+    g->dc_expire = time(NULL) + 30;
+
+    // ❗ KHÔNG gửi OPPONENT_DISCONNECTED cho player
+    // Chỉ gửi cho spectator (nếu có)
     char msg[64];
-    snprintf(msg, sizeof(msg), "OPPONENT_DISCONNECTED|30\n");
-    send_logged(other, msg);
+    snprintf(msg, sizeof(msg),
+             "SPEC_DISCONNECT|%s|30\n",
+             sock == g->p1 ? "P1" : "P2");
+    send_to_spectators(g, msg);
+
+    // Remove khỏi matchmaking
+    mm_remove_socket(sock);
+
+    // Reset state user
+    c->state = STATE_IDLE;
+    c->last_ping = 0;
 }
 
+// Check for disconnected players and handle forfeit
 void gs_tick_afk(void)
 {
     time_t now = time(NULL);
@@ -536,14 +549,19 @@ void gs_tick_afk(void)
         if (!g->alive)
             continue;
 
+        // Có player đang bị DC
         if (g->dc_sock != 0 && now >= g->dc_expire)
         {
-            gs_forfeit(g->dc_sock);
+            int loser = g->dc_sock;
+            int winner = (loser == g->p1) ? g->p2 : g->p1;
+
+            gs_finish_game(g, winner, "DISCONNECT");
             g->dc_sock = 0;
         }
     }
 }
 
+// Check for turn timeouts
 void gs_tick_turn_timeout(void)
 {
     time_t now = time(NULL);
@@ -551,7 +569,8 @@ void gs_tick_turn_timeout(void)
     for (int i = 0; i < game_count; i++)
     {
         Game *g = &games[i];
-        if (!g->alive) continue;
+        if (!g->alive)
+            continue;
 
         if (difftime(now, g->turn_started_at) >= 45)
         {
@@ -562,16 +581,16 @@ void gs_tick_turn_timeout(void)
             int cur = (g->turn == 1 ? g->p1 : g->p2);
             int other = (g->turn == 1 ? g->p2 : g->p1);
 
-            send_logged(cur,   "YOUR_TURN\n");
-            send_logged(other,"OPPONENT_TURN\n");
+            send_logged(cur, "YOUR_TURN\n");
+            send_logged(other, "OPPONENT_TURN\n");
 
-            send_logged(cur,   "INFO|Opponent timed out. Your turn.\n");
-            send_logged(other,"INFO|You ran out of time. Opponent turn.\n");
+            send_logged(cur, "INFO|Opponent timed out. Your turn.\n");
+            send_logged(other, "INFO|You ran out of time. Opponent turn.\n");
         }
     }
 }
 
-
+// Forfeit the game
 void gs_forfeit(int sock)
 {
     Game *g = find_game(sock);
@@ -581,53 +600,134 @@ void gs_forfeit(int sock)
     int is_p1 = (sock == g->p1);
     int winner_sock = is_p1 ? g->p2 : g->p1;
 
-    if (g->ranked)
+    gs_finish_game(g, winner_sock, "SURRENDER");
+}
+
+void gs_handle_leave(int sock)
+{
+    Game *g = gs_find_by_player(sock);
+
+    if (g)
     {
-        int Ra = g->elo1;
-        int Rb = g->elo2;
-        int newRa, newRb;
-
-        if (is_p1)
-        {
-            elo_update_pair(Ra, Rb, 1, 32, &newRa, &newRb);
-            db_set_elo(g->user1, newRa);
-            db_set_elo(g->user2, newRb);
-
-            db_add_history(g->user1, g->user2, "WIN", newRa - Ra);
-            db_add_history(g->user2, g->user1, "LOSE", newRb - Rb);
+        if (sock == g->p1) {
+            g->left1 = 1;
+            g->p1 = 0;   
         }
-        else
-        {
-            elo_update_pair(Rb, Ra, 1, 32, &newRb, &newRa);
-            db_set_elo(g->user1, newRa);
-            db_set_elo(g->user2, newRb);
+        else if (sock == g->p2) {
+            g->left2 = 1;
+            g->p2 = 0;   
+        }
 
-            db_add_history(g->user2, g->user1, "WIN", newRb - Rb);
-            db_add_history(g->user1, g->user2, "LOSE", newRa - Ra);
+        int other = (g->p1 != 0) ? g->p1 : g->p2;
+        if (other > 0)
+            send_logged(other, "OPPONENT_LEFT\n");
+
+        if (g->left1 && g->left2)
+        {
+            memset(g, 0, sizeof(Game));
         }
     }
 
-    if (is_p1)
-    {
+    OnlineUser *u = online_user_by_sock(sock);
+    if (u)
+        u->state = STATE_IDLE;
 
-        db_add_history(g->user1, g->user2, "WIN", 0);
-        db_add_history(g->user2, g->user1, "LOSE", 0);
+    send_logged(sock, "LEFT_GAME\n");
+    mm_remove_socket(sock);
+}
+
+
+
+// xong game thi di qua day de update elo va history
+void gs_finish_game(Game *g, int winner_sock, const char *reason)
+{
+    if (!g || !g->alive)
+        return;
+
+    int p1 = g->p1;
+    int p2 = g->p2;
+
+    int winner_is_p1 = (winner_sock == p1);
+    int loser_sock = winner_is_p1 ? p2 : p1;
+
+    /* ===== ELO + HISTORY ===== */
+    int delta_w = 0, delta_l = 0;
+
+    if (g->ranked)
+    {
+        int Ra = g->elo1, Rb = g->elo2;
+        int newRa, newRb;
+
+        if (winner_is_p1)
+            elo_update_pair(Ra, Rb, 1, 32, &newRa, &newRb);
+        else
+            elo_update_pair(Ra, Rb, 0, 32, &newRa, &newRb);
+
+        db_set_elo(g->user1, newRa);
+        db_set_elo(g->user2, newRb);
+
+        delta_w = winner_is_p1 ? (newRa - Ra) : (newRb - Rb);
+        delta_l = winner_is_p1 ? (newRb - Rb) : (newRa - Ra);
+    }
+
+    if (winner_is_p1)
+    {
+        db_add_history(g->user1, g->user2, "WIN", delta_w);
+        db_add_history(g->user2, g->user1, "LOSE", delta_l);
     }
     else
     {
-
-        db_add_history(g->user2, g->user1, "WIN", 0);
-        db_add_history(g->user1, g->user2, "LOSE", 0);
+        db_add_history(g->user2, g->user1, "WIN", delta_w);
+        db_add_history(g->user1, g->user2, "LOSE", delta_l);
     }
 
+    /* ===== SEND RESULT ===== */
     send_logged(winner_sock, "GAMEOVER|WIN\n");
-    send_logged(sock, "GAMEOVER|LOSE\n");
+    send_logged(loser_sock, "GAMEOVER|LOSE\n");
 
-    g->alive = 0;
+    char msg[128];
+    snprintf(msg, sizeof(msg),
+             "SPEC_GAMEOVER|WINNER=%s|REASON=%s\n",
+             winner_is_p1 ? "P1" : "P2", reason);
+    send_to_spectators(g, msg);
+
+    /* ===== RESET PLAYER STATE ===== */
+    // OnlineUser *u1 = online_user_by_sock(p1);
+    // OnlineUser *u2 = online_user_by_sock(p2);
+
+    // if (u1) u1->state = STATE_IDLE;
+    // if (u2) u2->state = STATE_IDLE;
+
+    /* ===== MARK GAME FINISHED (DO NOT DELETE) ===== */
+    g->alive = 0;          // game kết thúc
     g->dc_sock = 0;
     g->dc_expire = 0;
+
+    // reset rematch flags cho vòng sau
+    g->rematch1 = 0;
+    g->rematch2 = 0;
+
+    // KHÔNG:
+    //  - reset p1 / p2
+    //  - memset game
+    //  - cleanup slot ở đây
 }
 
+
+void gs_cleanup_finished_games()
+{
+    for (int i = 0; i < game_count; i++)
+    {
+        if (!games[i].alive)
+        {
+            games[i] = games[game_count - 1];
+            game_count--;
+            i--;
+        }
+    }
+}
+
+// Send reaction emoji
 void gs_send_react(int from_sock, const char *emoji)
 {
     int opponent = gs_get_opponent_sock(from_sock);
@@ -643,6 +743,7 @@ void gs_send_react(int from_sock, const char *emoji)
     send_logged(opponent, msg);
 }
 
+// Send chat message
 void gs_send_chat(int from_sock, const char *msg)
 {
     Game *g = find_game(from_sock);
@@ -661,6 +762,145 @@ void gs_send_chat(int from_sock, const char *msg)
     int opp = gs_get_opponent_sock(from_sock);
     if (opp > 0)
         send_logged(opp, buf);
+}
+
+// Add a spectator
+int gs_add_spectator(Game *gs, int sock)
+{
+    if (gs->spectator_count >= MAX_SPECTATORS)
+        return -1;
+
+    gs->spectators[gs->spectator_count++] = sock;
+    return 0;
+}
+
+// Remove a spectator
+void gs_remove_spectator(Game *gs, int sock)
+{
+    for (int i = 0; i < gs->spectator_count; i++)
+    {
+        if (gs->spectators[i] == sock)
+        {
+            gs->spectators[i] =
+                gs->spectators[--gs->spectator_count];
+            return;
+        }
+    }
+}
+
+// Gửi thông báo đến tất cả spectator
+static void notify_spectators(Game *gs, const char *msg)
+{
+    for (int i = 0; i < gs->spectator_count; i++)
+    {
+        send_logged(gs->spectators[i], msg);
+    }
+}
+
+// Check if user is in any game
+int user_is_in_game(const char *username)
+{
+    int sock = user_get_sock(username);
+    if (sock < 0)
+        return 0;
+
+    return gs_find_by_player(sock) != NULL;
+}
+
+// Find game session by player socket
+Game *gs_find_by_player(int sock)
+{
+    for (int i = 0; i < game_count; i++)
+    {
+        Game *gs = &games[i];
+        if (gs->alive && (gs->p1 == sock || gs->p2 == sock))
+            return gs;
+    }
+    return NULL;
+}
+
+// Check if sock is a player in the game session
+int gs_is_player(Game *gs, int sock)
+{
+    return gs->p1 == sock || gs->p2 == sock;
+}
+
+// Check if sock is a spectator in the game session
+int gs_is_spectator(Game *gs, int sock)
+{
+    for (int i = 0; i < gs->spectator_count; i++)
+        if (gs->spectators[i] == sock)
+            return 1;
+    return 0;
+}
+
+void send_to_spectators(Game *g, const char *msg)
+{
+    for (int i = 0; i < g->spectator_count; i++)
+    {
+        send_logged(g->spectators[i], msg);
+    }
+}
+
+void build_spec_board(unsigned char *shots, char *out)
+{
+    for (int i = 0; i < 100; i++)
+    {
+        if (shots[i] == 'H')
+            out[i] = 'H';
+        else if (shots[i] == 'M')
+            out[i] = 'M';
+        else
+            out[i] = 'U';
+    }
+    out[100] = '\0';
+}
+
+void gs_send_snapshot_to_spectator(Game *g, int spec_sock)
+{
+    char board[101];
+    char msg[256];
+
+    // P1 board (shots by P2)
+    build_spec_board(g->shots_by_p2, board);
+    snprintf(msg, sizeof(msg), "SPEC_BOARD|P1|%s\n", board);
+    send_logged(spec_sock, msg);
+
+    // P2 board (shots by P1)
+    build_spec_board(g->shots_by_p1, board);
+    snprintf(msg, sizeof(msg), "SPEC_BOARD|P2|%s\n", board);
+    send_logged(spec_sock, msg);
+
+    // Current turn
+    snprintf(msg, sizeof(msg),
+             "SPEC_TURN|%s\n",
+             g->turn == 1 ? "P1" : "P2");
+    send_logged(spec_sock, msg);
+}
+
+void build_ship_bits(unsigned char *ships, char *out)
+{
+    for (int i = 0; i < 100; i++)
+        out[i] = (ships[i] == 1 || ships[i] == 2) ? '1' : '0';
+    out[100] = '\0';
+}
+
+void gs_send_ship_snapshot(Game *g, int spec_sock)
+{
+    char bits[101];
+    char msg[256];
+
+    // P1 ships
+    build_ship_bits(g->ships1, bits);
+    snprintf(msg, sizeof(msg),
+             "SPEC_SHIPS|P1|%s\n", bits);
+    send_logged(spec_sock, msg);
+
+    // P2 ships
+    build_ship_bits(g->ships2, bits);
+    snprintf(msg, sizeof(msg),
+             "SPEC_SHIPS|P2|%s\n", bits);
+    send_logged(spec_sock, msg);
 }
 
 /* ===================== REMATCH ===================== */
@@ -871,7 +1111,7 @@ void gs_request_rematch(int sock)
     fflush(stdout);
 
     char notice[128];
-    snprintf(notice, sizeof(notice), "REMATCH_REQUEST|%s\n", who);
+    snprintf(notice, sizeof(notice), "REMATCH|%s\n", who);
     if (g->p1 > 0)
         send_logged(g->p1, notice);
     if (g->p2 > 0)

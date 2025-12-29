@@ -1,6 +1,7 @@
 # client/network_client.py
 import socket
 import threading
+import time
 import queue
 from dotenv import load_dotenv
 import os
@@ -9,7 +10,7 @@ load_dotenv()
 
 
 class NetworkClient:
-    def __init__(self, host="127.0.0.1", port=5050): 
+    def __init__(self, host='10.172.35.181', port=5050): 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock.connect((host, port))
@@ -19,6 +20,8 @@ class NetworkClient:
         self.on_disconnect = None                         
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
+        self._ping_thread = threading.Thread(target=self._ping_loop, daemon=True)
+        self._ping_thread.start()
         self.sock.setblocking(True)
 
     def _recv_loop(self):
@@ -43,6 +46,13 @@ class NetworkClient:
                         self.recv_queue.put(line)
         except OSError:
             self.alive = False
+
+
+    def _ping_loop(self):
+        """Gửi PING định kỳ để server không timeout (server timeout >15s)."""
+        while self.alive:
+            self.send("PING")
+            time.sleep(5)
 
     def send(self, msg: str):
         if not self.alive:
@@ -102,6 +112,8 @@ class NetworkClient:
             daemon=True
         )
         obj._recv_thread.start()
+        obj._ping_thread = threading.Thread(target=obj._ping_loop, daemon=True)
+        obj._ping_thread.start()
 
         return obj
 
