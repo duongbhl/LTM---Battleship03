@@ -483,14 +483,20 @@ def run_online_game(net, username, mode, send_find_match:bool = True):
                             result = "WIN"
 
                     elif cmd == "OPPONENT_MOVE":
-                        opponent_dc = False 
                         x = int(parts[1]); y = int(parts[2])
                         idx = y * 10 + x
-                        my_board[idx] = "H" if parts[3] == "HIT" else "M"
+
+                        hit_result = parts[3]
                         status = parts[4].split("=")[-1]
-                        if status == "LOSE":                                                                     
-                            phase = "gameover"
-                            result = "LOSE"
+
+                        if hit_result == "HIT":
+                            my_board[idx] = "H"
+
+                            if status == "SUNK":
+                                ship_cells = parts[5] if len(parts) >= 6 else ""
+                                for pos in ship_cells.split(","):
+                                    if pos.isdigit():
+                                        my_board[int(pos)] = "S"
 
                     elif cmd == "MY_REACT":
                         emoji = parts[1]
