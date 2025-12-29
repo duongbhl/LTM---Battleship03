@@ -114,6 +114,14 @@ static void *client_thread(void *arg)
             continue;
         }
 
+        else if (strcmp(cmd, "CANCEL_QUEUE") == 0)
+        {
+            // Allow client to go back to menu without disconnecting.
+            mm_remove_socket(sock);
+            send_logged(sock, "QUEUE_CANCELLED\n");
+            continue;
+        }
+
         else if (strcmp(cmd, "MOVE") == 0 && parts == 3)
         {
             int x = atoi(a);
@@ -131,6 +139,25 @@ static void *client_thread(void *arg)
         {
             printf("[Server] %d sent SURRENDER\n", sock);
             gs_forfeit(sock);
+            continue;
+        }
+
+        else if (strcmp(cmd, "REMATCH") == 0)
+        {
+            // Player wants to play again with the same opponent.
+            gs_request_rematch(sock);
+            continue;
+        }
+        else if (strcmp(cmd, "REMATCH_ACCEPT") == 0)
+        {
+            // Opponent accepted a pending rematch request.
+            gs_accept_rematch(sock);
+            continue;
+        }
+        else if (strcmp(cmd, "REMATCH_DECLINE") == 0)
+        {
+            // Opponent declined a pending rematch request.
+            gs_decline_rematch(sock);
             continue;
         }
         else if (strcmp(cmd, "GET_HISTORY") == 0 && parts >= 2)
@@ -179,6 +206,35 @@ static void *client_thread(void *arg)
         {
             // a = username
             handle_get_friends_online(sock, a);
+            continue;
+        }
+
+        /* ===== Direct ELO challenge between friends ===== */
+        else if (strcmp(cmd, "CHALLENGE_ELO") == 0 && parts == 3)
+        {
+            // a = from, b = to
+            handle_challenge_elo(sock, a, b);
+            continue;
+        }
+
+        else if (strcmp(cmd, "CHALLENGE_ACCEPT") == 0 && parts == 3)
+        {
+            // a = me, b = other (challenger)
+            handle_challenge_accept(sock, a, b);
+            continue;
+        }
+
+        else if (strcmp(cmd, "CHALLENGE_DECLINE") == 0 && parts == 3)
+        {
+            // a = me, b = other (challenger)
+            handle_challenge_decline(sock, a, b);
+            continue;
+        }
+
+        else if (strcmp(cmd, "CHALLENGE_CANCEL") == 0 && parts == 3)
+        {
+            // a = from, b = to
+            handle_challenge_cancel(sock, a, b);
             continue;
         }
 
