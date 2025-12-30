@@ -10,7 +10,7 @@ load_dotenv()
 
 
 class NetworkClient:
-    def __init__(self, host='10.172.35.181', port=5050): 
+    def __init__(self, host='10.172.35.48', port=5050): 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock.connect((host, port))

@@ -497,6 +497,8 @@ def run_online_game(net, username, mode, send_find_match:bool = True):
                                 for pos in ship_cells.split(","):
                                     if pos.isdigit():
                                         my_board[int(pos)] = "S"
+                        else:
+                            my_board[idx] = "M"  
 
                     elif cmd == "MY_REACT":
                         emoji = parts[1]

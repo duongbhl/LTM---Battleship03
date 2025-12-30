@@ -139,7 +139,7 @@ def send_auth_request(command, username, password):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5)
-        sock.connect(("10.172.35.181", 5050)) 
+        sock.connect(("10.172.35.48", 5050)) 
         
         request = f"{command}|{username}|{password}\n"
         sock.sendall(request.encode())
