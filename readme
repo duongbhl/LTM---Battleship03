@@ -1,14 +1,124 @@
-//TAI SQLITE TREN UBUNTU
+# LTM - Battleship03
 
-//1. sudo apt install sqlite3         //kiem tra xem da co chua:  sqlite3 --version
-//2. sudo apt install libsqlite3-dev  //Cài thư viện dev để compile trong C
+Dự án game Battleship (Hải chiến) online với kiến trúc client-server, hỗ trợ chế độ chơi nhiều người qua mạng với hệ thống xếp hạng ELO, bạn bè và matchmaking.
+
+## 📋 Giới thiệu
+
+**Battleship Online** là một game chiến thuật trên biển được phát triển bằng Python (client) và C (server). Game cho phép người chơi: 
+
+- 🎮 Chơi Battleship online với người chơi khác qua mạng
+- 👥 Hệ thống bạn bè và gửi lời mời thách đấu
+- 🏆 Hệ thống xếp hạng ELO
+- 🎯 Matchmaking tự động tìm đối thủ phù hợp
+- 😄 Gửi emote trong game
+- 💾 Lưu trữ dữ liệu người chơi với SQLite
+
+### Công nghệ sử dụng
+
+- **Client**: Python 3, Pygame
+- **Server**: C (socket TCP), SQLite3
+- **Network**: TCP/IP Socket Programming
+- **Database**: SQLite3
+
+## 🚀 Cài đặt
+
+### Yêu cầu hệ thống
+
+**Server (Ubuntu/Linux):**
+- GCC compiler
+- SQLite3
+- Thư viện phát triển SQLite3
+- pthread
+
+**Client:**
+- Python 3.7+
+- Pygame
+- python-dotenv
+
+### Cài đặt Server
+
+1. **Cài đặt SQLite3 và các thư viện cần thiết:**
+
+```bash
+# Kiểm tra xem đã có SQLite3 chưa
+sqlite3 --version
+
+# Nếu chưa có, cài đặt:
+sudo apt install sqlite3
+
+# Cài thư viện dev để compile trong C
+sudo apt install libsqlite3-dev
+```
+
+2. **Compile server:**
+
+```bash
+cd server/
+make
+```
+
+3. **Khởi tạo database:**
+
+```bash
+# Tạo và kiểm tra database
+sqlite3 battleship.db
+
+# Trong SQLite shell, kiểm tra database: 
+PRAGMA database_list;
+
+# Thoát SQLite
+. quit
+```
+
+4. **Chạy server:**
+
+```bash
+./server
+```
+
+Khi thành công, bạn sẽ thấy: 
+```
+Database connected! 
+SERVER STARTED ON PORT 5050
+```
+
+5. **Kiểm tra kết nối (optional):**
+
+```bash
+# Mở terminal khác
+telnet 127.0.0.1 5050
+```
+
+Nếu thành công, server sẽ hiển thị:  `New client connected! `
+
+### Cài đặt Client
+
+1. **Cài đặt Python dependencies:**
+
+```bash
+cd client/
+pip install pygame python-dotenv
+```
+
+2. **Cấu hình kết nối:**
+
+Chỉnh sửa file `client/.env`:
+```env
+IP_PUBLIC = 10.172.35.181    # IP server public
+IP_LOCALHOST = 127.0.0.1     # IP localhost
+```
+
+Cập nhật IP server trong `client/network_client.py` (dòng 13):
+```python
+def __init__(self, host='YOUR_SERVER_IP', port=5050):
+```
+
+3. **Chạy client:**
+
+```bash
+python gui.py
+```
 
 
-//KET NOI DB VA THIET LAP TCP SERVER
 
-//1. ae vao thu muc server/ tren terminal
-//2. nhap: sqlite3 battleship.db     //kiem tra: PRAGMA database_list; neu hien kieu server/battleship.db la duoc
-//3. thoat sqlite3 ra roi nhap: ./server //hien Database connected!SERVER STARTED ON PORT 5050 la thanh cong
-//4. mo 1 terminal khac van trong thu muc server/ roi nhap: telnet 127.0.0.1 5050 //check terminal con lai ma thay: New client connected! la oke r 
-//trong db moi co bang user thoi, cac bang khac chua co, de huy xong login da roi tinh tiep
-
+**Chúc bạn chơi game vui vẻ!  🎮⚓**
